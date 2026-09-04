@@ -1,0 +1,37 @@
+import { Env, json } from "./_lib/db";
+import { RUN_FIELDS } from "./_lib/columns";
+import { buildWhere, parseFilters } from "./_lib/filters";
+
+const MAX_EXPORT_ROWS = 50_000;
+
+function csvCell(v: unknown): string {
+  if (v == null) return "";
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
+  const url = new URL(request.url);
+  const format = url.searchParams.get("format") ?? "csv";
+  if (format !== "csv" && format !== "json") {
+    return json({ error: "format must be csv or json" }, 400);
+  }
+  const { clause, params } = buildWhere(parseFilters(url));
+  const { results } = await env.DB.prepare(
+    `SELECT ${RUN_FIELDS.join(", ")} FROM runs${clause} ` +
+    "ORDER BY run_accession LIMIT ?"
+  ).bind(...params, MAX_EXPORT_ROWS).all();
+
+  if (format === "json") return json(results);
+
+  const lines = (results as Record<string, unknown>[]).map((r) =>
+    RUN_FIELDS.map((f) => csvCell(r[f])).join(",")
+  );
+  const csv = [RUN_FIELDS.join(","), ...lines].join("\n") + "\n";
+  return new Response(csv, {
+    headers: {
+      "content-type": "text/csv",
+      "content-disposition": "attachment; filename=ksadb_export.csv",
+    },
+  });
+};
