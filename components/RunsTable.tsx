@@ -17,7 +17,7 @@ export function RunsTable({ runs }: { runs: RunItem[] }) {
         {runs.map((r) => (
           <tr key={r.run_accession} className="border-b hover:bg-gray-50">
             <td className="p-2">
-              <Link className="text-blue-600 hover:underline" href={`/records/${r.run_accession}`}>
+              <Link className="text-blue-600 hover:underline" href={`/record?id=${r.run_accession}`}>
                 {r.run_accession}
               </Link>
             </td>
@@ -26,7 +26,7 @@ export function RunsTable({ runs }: { runs: RunItem[] }) {
             <td className="p-2">
               {r.institution_name ? (
                 <Link className="text-blue-600 hover:underline"
-                  href={`/institutions/${encodeURIComponent(r.institution_name)}`}>
+                  href={`/institution?name=${encodeURIComponent(r.institution_name)}`}>
                   {r.institution_name}
                 </Link>
               ) : "—"}

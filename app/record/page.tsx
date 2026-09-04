@@ -1,25 +1,27 @@
+"use client";
+
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-import { apiGet, RecordOut } from "@/lib/api";
+import { useQuery } from "@/lib/useQuery";
+import type { RecordOut } from "@/lib/api";
 
-// Task 9 neutralization: `output: "export"` requires every dynamic segment to
-// yield at least one static path, and server-side prerender cannot reach the
-// same-origin API (relative URL, no server at build time). A dummy param is
-// prerendered into a 404 via the page's existing try/catch. Task 10 rewrites
-// this page as a client component.
-export const dynamic = "force-static";
-export function generateStaticParams() {
-  return [{ id: "_" }];
+export default function RecordPage() {
+  return (
+    <Suspense fallback={<p>Loading…</p>}>
+      <RecordInner />
+    </Suspense>
+  );
 }
 
-export default async function RecordPage({ params }: { params: { id: string } }) {
-  let record: RecordOut;
-  try {
-    record = await apiGet<RecordOut>(`/records/${params.id}`);
-  } catch {
-    notFound();
-  }
+function RecordInner() {
+  const id = useSearchParams().get("id");
+  const { data: record, error } = useQuery<RecordOut>(id ? `/records/${id}` : null);
+
+  if (!id) return <p>No run accession given.</p>;
+  if (error) return <p className="text-red-600">Run {id} not found.</p>;
+  if (!record) return <p>Loading…</p>;
 
   const fields: [string, string][] = [
     ["Run", record.run_accession],
@@ -41,13 +43,19 @@ export default async function RecordPage({ params }: { params: { id: string } })
         <a className="text-blue-600 hover:underline" href={record.ena_url} target="_blank">ENA ↗</a>
         {record.bioproject_accession && (
           <Link className="text-blue-600 hover:underline"
-            href={`/projects/${record.bioproject_accession}`}>
+            href={`/project?id=${record.bioproject_accession}`}>
             {record.bioproject_accession}
+          </Link>
+        )}
+        {record.biosample_accession && (
+          <Link className="text-blue-600 hover:underline"
+            href={`/samples?acc=${record.biosample_accession}`}>
+            {record.biosample_accession}
           </Link>
         )}
         {record.institution_name && (
           <Link className="text-blue-600 hover:underline"
-            href={`/institutions/${encodeURIComponent(record.institution_name)}`}>
+            href={`/institution?name=${encodeURIComponent(record.institution_name)}`}>
             {record.institution_name}
           </Link>
         )}
