@@ -5,5 +5,5 @@ compatibility_date = "2024-11-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "ksadb-db"
-database_id = "REPLACE_AFTER_NPX_WRANGLER_D1_CREATE"
+database_id = "2cb05812-7c51-4078-ba20-9d0ca90cc7e6"
 migrations_dir = "migrations"

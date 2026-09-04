@@ -50,5 +50,5 @@ npm run typecheck && npm run build
 
 `GET /api/search` · `/api/records/{acc}` · `/api/projects/{acc}` · `/api/institutions/{name}` ·
 `/api/samples/{acc}` · `/api/export?format=csv|json` ·
-`/api/stats/summary` · `/stats/timeseries` · `/stats/top?dimension=` ·
-`/stats/saudi-split` · `/stats/library-strategies` · `/stats/wgs-trend` · `/stats/human` · `/api/pathogens`
+`/api/stats/summary` · `/api/stats/timeseries` · `/api/stats/top?dimension=` ·
+`/api/stats/saudi-split` · `/api/stats/library-strategies` · `/api/stats/wgs-trend` · `/api/stats/human` · `/api/pathogens`
