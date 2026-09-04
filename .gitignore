@@ -1,0 +1,14 @@
+.venv/
+node_modules/
+.next/
+out/
+data/
+.tmp-sql/
+.wrangler/
+.dev.vars
+.env
+__pycache__/
+*.pyc
+.DS_Store
+tsconfig.tsbuildinfo
+.pytest_cache/
