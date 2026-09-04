@@ -39,7 +39,7 @@ def d1_server():
                     {"success": False, "errors": [{"message": "boom"}]}
                 ).encode()
             else:
-                n = len(body.get("statements", []))
+                n = len(body.get("batch", []))
                 payload = json.dumps(
                     {"success": True,
                      "result": [{"success": True, "results": []}] * max(n, 1)}
@@ -115,8 +115,8 @@ def test_push_rows_batches_and_auth(d1_server):
     stats = push_rows(rows, mode="seed", account_id="acc", database_id="db",
                       api_token="tok", base_url=base_url, batch_size=4)
     assert stats["rows"] == 10
-    assert sum(len(r["body"]["statements"]) for r in received) == stats["statements"]
-    assert all(len(r["body"]["statements"]) <= 4 for r in received)
+    assert sum(len(r["body"]["batch"]) for r in received) == stats["statements"]
+    assert all(len(r["body"]["batch"]) <= 4 for r in received)
     assert all(r["auth"] == "Bearer tok" for r in received)
 
 

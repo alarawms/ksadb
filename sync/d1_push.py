@@ -112,7 +112,7 @@ class D1Client:
     def execute(self, statements: list[str]) -> None:
         resp = self.http.post(
             self.url, headers=self.headers,
-            json={"statements": statements}, timeout=120,
+            json={"batch": [{"sql": s} for s in statements]}, timeout=120,
         )
         resp.raise_for_status()
         body = resp.json()
