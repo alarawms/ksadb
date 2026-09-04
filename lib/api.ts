@@ -75,3 +75,16 @@ export interface PathogensResponse {
   top: TopRow[];
   by_year: TimeseriesPoint[];
 }
+
+export interface HumanStats {
+  total_runs: number;
+  total_bases: number;
+  by_year: TimeseriesPoint[];
+  top_institutions: TopRow[];
+}
+
+export interface SampleOut {
+  biosample_accession: string;
+  projects: string[];
+  runs: RunItem[];
+}

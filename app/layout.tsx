@@ -12,6 +12,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <span className="text-lg font-bold">KSADB</span>
             <Link href="/dashboard" className="hover:underline">Dashboard</Link>
             <Link href="/search" className="hover:underline">Search</Link>
+            <Link href="/pathogens" className="hover:underline">Pathogens</Link>
+            <Link href="/genomes" className="hover:underline">Genomes</Link>
+            <Link href="/human" className="hover:underline">Human</Link>
+            <Link href="/compare" className="hover:underline">Compare</Link>
           </nav>
         </header>
         <main className="mx-auto max-w-6xl p-4">{children}</main>
