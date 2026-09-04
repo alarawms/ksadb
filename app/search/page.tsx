@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { apiGet, PUBLIC_API, SearchResponse } from "@/lib/api";
+import { apiGet, SearchResponse } from "@/lib/api";
 import { FilterBar } from "@/components/FilterBar";
 import { RunsTable } from "@/components/RunsTable";
 
@@ -16,6 +16,12 @@ function buildQuery(searchParams: Record<string, string | undefined>, page: numb
   return qs.toString();
 }
 
+// Task 9 neutralization: the API is now same-origin, so it cannot be reached
+// during static prerender (relative URL, no server at build time). force-static
+// keeps the no-store fetch from marking the route dynamic; the catch renders a
+// placeholder. Task 10 rewrites this page as a client component.
+export const dynamic = "force-static";
+
 export default async function SearchPage({
   searchParams,
 }: {
@@ -23,9 +29,19 @@ export default async function SearchPage({
 }) {
   const page = Math.max(1, Number(searchParams.page ?? "1") || 1);
   const qs = buildQuery(searchParams, page);
-  const data = await apiGet<SearchResponse>(`/search?${qs}`);
+  let data: SearchResponse;
+  try {
+    data = await apiGet<SearchResponse>(`/search?${qs}`);
+  } catch {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold">Search</h1>
+        <p className="text-sm text-gray-600">Loading…</p>
+      </div>
+    );
+  }
   const totalPages = Math.max(1, Math.ceil(data.total / data.page_size));
-  const exportUrl = `${PUBLIC_API}/api/export?format=csv&${buildQuery(searchParams, 1).replace(/&?page=1/, "")}`;
+  const exportUrl = `/api/export?format=csv&${buildQuery(searchParams, 1).replace(/&?page=1/, "")}`;
 
   return (
     <div className="space-y-4">

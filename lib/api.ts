@@ -1,8 +1,5 @@
-export const API = process.env.API_URL ?? "http://localhost:8000";
-export const PUBLIC_API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}/api${path}`, { cache: "no-store" });
+  const res = await fetch(`/api${path}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`API ${path} -> ${res.status}`);
   return res.json();
 }

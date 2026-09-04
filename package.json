@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "pages:dev": "wrangler pages dev .next/out",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

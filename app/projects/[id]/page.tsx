@@ -3,6 +3,16 @@ import { notFound } from "next/navigation";
 import { apiGet, ProjectOut } from "@/lib/api";
 import { RunsTable } from "@/components/RunsTable";
 
+// Task 9 neutralization: `output: "export"` requires every dynamic segment to
+// yield at least one static path, and server-side prerender cannot reach the
+// same-origin API (relative URL, no server at build time). A dummy param is
+// prerendered into a 404 via the page's existing try/catch. Task 10 rewrites
+// this page as a client component.
+export const dynamic = "force-static";
+export function generateStaticParams() {
+  return [{ id: "_" }];
+}
+
 export default async function ProjectPage({ params }: { params: { id: string } }) {
   let project: ProjectOut;
   try {

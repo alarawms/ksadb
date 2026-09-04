@@ -2,14 +2,34 @@ import { apiGet, StatsSummary, TimeseriesPoint, TopRow } from "@/lib/api";
 import { StatCard } from "@/components/StatCard";
 import { TopBarChart, TrendChart } from "@/components/Charts";
 
+// Task 9 neutralization: the API is now same-origin, so it cannot be reached
+// during static prerender (relative URL, no server at build time). force-static
+// keeps the no-store fetch from marking the route dynamic; the catch renders a
+// placeholder. Task 10 rewrites this page as a client component.
+export const dynamic = "force-static";
+
 export default async function DashboardPage() {
-  const [summary, ts, orgs, plats, insts] = await Promise.all([
-    apiGet<StatsSummary>("/stats/summary"),
-    apiGet<TimeseriesPoint[]>("/stats/timeseries"),
-    apiGet<TopRow[]>("/stats/top?dimension=organism"),
-    apiGet<TopRow[]>("/stats/top?dimension=platform"),
-    apiGet<TopRow[]>("/stats/top?dimension=institution"),
-  ]);
+  let summary: StatsSummary;
+  let ts: TimeseriesPoint[];
+  let orgs: TopRow[];
+  let plats: TopRow[];
+  let insts: TopRow[];
+  try {
+    [summary, ts, orgs, plats, insts] = await Promise.all([
+      apiGet<StatsSummary>("/stats/summary"),
+      apiGet<TimeseriesPoint[]>("/stats/timeseries"),
+      apiGet<TopRow[]>("/stats/top?dimension=organism"),
+      apiGet<TopRow[]>("/stats/top?dimension=platform"),
+      apiGet<TopRow[]>("/stats/top?dimension=institution"),
+    ]);
+  } catch {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <p className="text-sm text-gray-600">Loading…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
