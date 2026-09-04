@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@/lib/useQuery";
-import type { StatsSummary, TimeseriesPoint, TopRow } from "@/lib/api";
+import type { StatsSummary, TimeseriesPoint, TopRow, SaudiSplit, PathogensResponse } from "@/lib/api";
 import { StatCard } from "@/components/StatCard";
 import { TopBarChart, TrendChart } from "@/components/Charts";
 
@@ -11,10 +11,13 @@ export default function DashboardPage() {
   const orgs = useQuery<TopRow[]>("/stats/top?dimension=organism");
   const plats = useQuery<TopRow[]>("/stats/top?dimension=platform");
   const insts = useQuery<TopRow[]>("/stats/top?dimension=institution");
+  const split = useQuery<SaudiSplit>("/stats/saudi-split");
+  const strategies = useQuery<TopRow[]>("/stats/library-strategies");
+  const pathogens = useQuery<PathogensResponse>("/pathogens");
 
-  const failed = [summary, ts, orgs, plats, insts].find((q) => q.error);
+  const failed = [summary, ts, orgs, plats, insts, split, strategies, pathogens].find((q) => q.error);
   if (failed) return <p className="text-red-600">{failed.error}</p>;
-  if (!summary.data || !ts.data || !orgs.data || !plats.data || !insts.data) {
+  if (!summary.data || !ts.data || !orgs.data || !plats.data || !insts.data || !split.data || !strategies.data || !pathogens.data) {
     return <p>Loading…</p>;
   }
   const s = summary.data;
@@ -37,6 +40,20 @@ export default function DashboardPage() {
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         <div className="rounded-lg border bg-white p-4">
+          <TopBarChart
+            data={[
+              { name: "Saudi", runs: split.data?.saudi?.runs ?? 0, total_bases: split.data?.saudi?.total_bases ?? 0 },
+              { name: "Non-Saudi", runs: split.data?.non_saudi?.runs ?? 0, total_bases: split.data?.non_saudi?.total_bases ?? 0 },
+            ]}
+            title="Runs by submitter origin"
+          />
+        </div>
+        <div className="rounded-lg border bg-white p-4">
+          <TopBarChart data={strategies.data ?? []} title="Library strategies" />
+        </div>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-lg border bg-white p-4">
           <TopBarChart data={orgs.data} title="Top organisms" />
         </div>
         <div className="rounded-lg border bg-white p-4">
@@ -44,6 +61,9 @@ export default function DashboardPage() {
         </div>
         <div className="col-span-full rounded-lg border bg-white p-4">
           <TopBarChart data={insts.data} title="Top institutions" />
+        </div>
+        <div className="col-span-full rounded-lg border bg-white p-4">
+          <TopBarChart data={pathogens.data?.top ?? []} title="Top pathogens" />
         </div>
       </div>
     </div>

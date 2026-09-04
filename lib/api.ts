@@ -67,3 +67,11 @@ export interface InstitutionOut {
   total_bases: number;
   unique_bioprojects: number;
 }
+
+export interface SaudiSplitSide { runs: number; total_bases: number; }
+export interface SaudiSplit { saudi: SaudiSplitSide | null; non_saudi: SaudiSplitSide | null; }
+
+export interface PathogensResponse {
+  top: TopRow[];
+  by_year: TimeseriesPoint[];
+}
