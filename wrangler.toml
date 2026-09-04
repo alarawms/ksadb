@@ -1,0 +1,9 @@
+name = "ksadb"
+pages_build_output_dir = ".next/out"
+compatibility_date = "2024-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ksadb-db"
+database_id = "REPLACE_AFTER_NPX_WRANGLER_D1_CREATE"
+migrations_dir = "migrations"
