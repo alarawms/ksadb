@@ -132,10 +132,8 @@ def _ena_row(rec: dict) -> dict:
     )
 
 
-def pull_all(db, http=requests) -> dict:
-    """Pull both archives, dedupe by run_accession (NCBI preferred), upsert."""
-    from api.sync.loader import rebuild_derived, record_sync, upsert_runs
-
+def pull_rows(http=requests) -> list[dict]:
+    """Pull both archives; return merged canonical rows (NCBI preferred)."""
     ncbi_rows = fetch_ncbi(http=http)
     ena_rows = fetch_ena(http=http)
 
@@ -144,8 +142,4 @@ def pull_all(db, http=requests) -> dict:
         merged[row["run_accession"]] = row
     for row in ena_rows:
         merged.setdefault(row["run_accession"], row)  # NCBI wins on overlap
-
-    stats = upsert_runs(db, list(merged.values()))
-    rebuild_derived(db)
-    record_sync(db, "pull", stats)
-    return stats
+    return list(merged.values())
