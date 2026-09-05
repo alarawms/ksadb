@@ -11,6 +11,7 @@ SAUDI_INSTITUTION_KEYWORDS: dict[str, tuple[str, ...]] = {
         "kaust",
         "king abdullah university of science and technology",
         "k.a.u.s.t",
+        "computational bioscience research center",
     ),
     "King Saud University": ("king saud university", "ksu ", "saud university"),
     "King Abdulaziz University": (

@@ -8,6 +8,13 @@ def test_normalize_kaust_variants():
         normalize_institution("King Abdullah University of Science and Technology", None)
         == "KAUST"
     )
+    assert (
+        normalize_institution("Computational Bioscience Research Center", None) == "KAUST"
+    )
+    assert (
+        normalize_institution("CBRC, Computational Bioscience Research Center, KA", None)
+        == "KAUST"
+    )
 
 
 def test_normalize_iau():

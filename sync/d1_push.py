@@ -77,6 +77,10 @@ def rebuild_statements() -> list[str]:
         "SELECT bioproject_accession, NULL, MAX(institution_name), COUNT(*), "
         "COALESCE(SUM(total_bases), 0) FROM runs "
         "WHERE bioproject_accession IS NOT NULL GROUP BY bioproject_accession",
+        # Drop institution names no longer referenced by any run, e.g. when a
+        # center-name mapping change (KAUST <- CBRC) renames them on re-push.
+        "DELETE FROM institutions WHERE name NOT IN "
+        "(SELECT DISTINCT institution_name FROM runs WHERE institution_name IS NOT NULL)",
     ]
 
 

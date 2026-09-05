@@ -97,6 +97,7 @@ def test_rebuild_statements():
     assert stmts[0] == "DELETE FROM bioprojects"
     assert stmts[1].startswith("INSERT INTO bioprojects")
     assert "GROUP BY bioproject_accession" in stmts[1]
+    assert stmts[2].startswith("DELETE FROM institutions WHERE name NOT IN")
 
 
 def test_build_statements_order():
