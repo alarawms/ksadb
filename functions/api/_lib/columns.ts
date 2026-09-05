@@ -10,6 +10,7 @@ export const RUN_COLUMNS = RUN_FIELDS.join(", ");
 
 export const RECORD_FIELDS = [
   ...RUN_FIELDS, "total_spots", "file_size_mb", "organization_name",
+  "library_source",
 ] as const;
 
 export const RECORD_COLUMNS = RECORD_FIELDS.join(", ");

@@ -47,8 +47,23 @@ export interface RecordOut extends RunItem {
   total_spots: number | null;
   file_size_mb: number | null;
   organization_name: string | null;
+  library_source: string | null;
   ncbi_url: string;
   ena_url: string;
+}
+
+export interface FacetsResponse {
+  platforms: { name: string; runs: number }[];
+}
+
+export interface InstitutionListItem {
+  name: string;
+  is_saudi: boolean;
+  runs: number;
+}
+
+export interface InstitutionListResponse {
+  items: InstitutionListItem[];
 }
 
 export interface ProjectOut {

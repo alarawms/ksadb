@@ -10,7 +10,7 @@ export default function GenomesPage() {
   const strategies = useQuery<TopRow[]>("/stats/library-strategies");
 
   const failed = [wgs, strategies].find((q) => q.error);
-  if (failed) return <p className="text-red-600">{failed.error}</p>;
+  if (failed) return <p className="text-danger">{failed.error}</p>;
   if (!wgs.data || !strategies.data) return <p>Loading…</p>;
 
   const totalRuns = wgs.data.reduce((s, p) => s + p.runs, 0);
@@ -24,11 +24,11 @@ export default function GenomesPage() {
         <StatCard label="WGS bases (Gb)"
           value={(totalBases / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })} />
       </div>
-      <div className="rounded-lg border bg-white p-4">
+      <div className="card">
         <h3 className="mb-2 font-semibold">WGS runs per year</h3>
         <TrendChart data={wgs.data} />
       </div>
-      <div className="rounded-lg border bg-white p-4">
+      <div className="card">
         <TopBarChart data={strategies.data} title="Library strategies (all runs)" />
       </div>
     </div>

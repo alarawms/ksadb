@@ -22,7 +22,7 @@ function InstitutionInner() {
   );
 
   if (!name) return <p>No institution given.</p>;
-  if (error) return <p className="text-red-600">Institution not found: {name}</p>;
+  if (error) return <p className="text-danger">Institution not found: {name}</p>;
   if (!inst) return <p>Loading…</p>;
 
   return (
@@ -30,7 +30,7 @@ function InstitutionInner() {
       <h1 className="text-2xl font-bold">
         {inst.name}{" "}
         {inst.is_saudi && (
-          <span className="rounded bg-green-100 px-2 py-1 text-sm text-green-800">Saudi</span>
+          <span className="badge badge-accent">Saudi</span>
         )}
       </h1>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3">

@@ -16,7 +16,7 @@ export default function DashboardPage() {
   const pathogens = useQuery<PathogensResponse>("/pathogens");
 
   const failed = [summary, ts, orgs, plats, insts, split, strategies, pathogens].find((q) => q.error);
-  if (failed) return <p className="text-red-600">{failed.error}</p>;
+  if (failed) return <p className="text-danger">{failed.error}</p>;
   if (!summary.data || !ts.data || !orgs.data || !plats.data || !insts.data || !split.data || !strategies.data || !pathogens.data) {
     return <p>Loading…</p>;
   }
@@ -34,12 +34,12 @@ export default function DashboardPage() {
           value={(s.total_bases / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })}
         />
       </div>
-      <div className="rounded-lg border bg-white p-4">
+      <div className="card">
         <h3 className="mb-2 font-semibold">Runs per year</h3>
         <TrendChart data={ts.data} />
       </div>
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-lg border bg-white p-4">
+        <div className="card">
           <TopBarChart
             data={[
               { name: "Saudi", runs: split.data?.saudi?.runs ?? 0, total_bases: split.data?.saudi?.total_bases ?? 0 },
@@ -48,21 +48,21 @@ export default function DashboardPage() {
             title="Runs by submitter origin"
           />
         </div>
-        <div className="rounded-lg border bg-white p-4">
+        <div className="card">
           <TopBarChart data={strategies.data ?? []} title="Library strategies" />
         </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-lg border bg-white p-4">
+        <div className="card">
           <TopBarChart data={orgs.data} title="Top organisms" />
         </div>
-        <div className="rounded-lg border bg-white p-4">
+        <div className="card">
           <TopBarChart data={plats.data} title="Top platforms" />
         </div>
-        <div className="col-span-full rounded-lg border bg-white p-4">
+        <div className="col-span-full card">
           <TopBarChart data={insts.data} title="Top institutions" />
         </div>
-        <div className="col-span-full rounded-lg border bg-white p-4">
+        <div className="col-span-full card">
           <TopBarChart data={pathogens.data?.top ?? []} title="Top pathogens" />
         </div>
       </div>

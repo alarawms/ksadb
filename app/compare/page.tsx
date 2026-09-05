@@ -36,9 +36,9 @@ export default function ComparePage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Compare institutions</h1>
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-white p-4">
+      <div className="flex flex-wrap items-center gap-2 card">
         <select
-          className="rounded border p-2"
+          className="input"
           value=""
           onChange={(e) => add(e.target.value)}
         >
@@ -48,32 +48,32 @@ export default function ComparePage() {
           ))}
         </select>
         {selected.map((name) => (
-          <span key={name} className="flex items-center gap-1 rounded bg-blue-100 px-2 py-1 text-sm">
+          <span key={name} className="flex items-center gap-1 chip">
             {name}
-            <button className="text-blue-800" onClick={() => setSelected(selected.filter((n) => n !== name))}>×</button>
+            <button onClick={() => setSelected(selected.filter((n) => n !== name))}>×</button>
           </span>
         ))}
       </div>
       {details.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border bg-white">
+        <div className="overflow-x-auto card">
           <table className="w-full text-left text-sm">
-            <thead className="border-b bg-gray-100">
+            <thead className="border-b border-[var(--border)] bg-[var(--surface-2)]">
               <tr>
                 <th className="p-2">Metric</th>
                 {details.map((d) => <th key={d.name} className="p-2">{d.name}</th>)}
               </tr>
             </thead>
             <tbody>
-              <tr className="border-b">
-                <td className="p-2 text-gray-600">Saudi</td>
+              <tr className="border-b border-[var(--border)]">
+                <td className="p-2 text-dim">Saudi</td>
                 {details.map((d) => <td key={d.name} className="p-2">{d.is_saudi ? "Yes" : "No"}</td>)}
               </tr>
-              <tr className="border-b">
-                <td className="p-2 text-gray-600">Runs</td>
+              <tr className="border-b border-[var(--border)]">
+                <td className="p-2 text-dim">Runs</td>
                 {details.map((d) => <td key={d.name} className="p-2">{d.runs.toLocaleString()}</td>)}
               </tr>
-              <tr className="border-b">
-                <td className="p-2 text-gray-600">Bases (Gb)</td>
+              <tr className="border-b border-[var(--border)]">
+                <td className="p-2 text-dim">Bases (Gb)</td>
                 {details.map((d) => (
                   <td key={d.name} className="p-2">
                     {(d.total_bases / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })}
@@ -81,7 +81,7 @@ export default function ComparePage() {
                 ))}
               </tr>
               <tr>
-                <td className="p-2 text-gray-600">BioProjects</td>
+                <td className="p-2 text-dim">BioProjects</td>
                 {details.map((d) => <td key={d.name} className="p-2">{d.unique_bioprojects.toLocaleString()}</td>)}
               </tr>
             </tbody>

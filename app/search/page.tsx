@@ -1,25 +1,17 @@
 "use client";
 
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 
 import { useQuery } from "@/lib/useQuery";
-import type { SearchResponse } from "@/lib/api";
-import { FilterBar } from "@/components/FilterBar";
+import { useDebounced } from "@/lib/useDebounced";
+import {
+  chipsFromState, countActiveFilters, paramsFromState, removeFilter,
+  stateFromParams, EMPTY_FILTERS, type FilterState,
+} from "@/lib/filterState";
+import type { FacetsResponse, InstitutionListResponse, SearchResponse } from "@/lib/api";
+import { FilterButton, FilterDrawer } from "@/components/FilterDrawer";
 import { RunsTable } from "@/components/RunsTable";
-
-const FILTER_KEYS = ["q", "organism", "platform", "institution", "year_from", "year_to", "source", "saudi_only"];
-
-function buildQuery(sp: URLSearchParams, page: number): string {
-  const qs = new URLSearchParams();
-  for (const key of FILTER_KEYS) {
-    const value = sp.get(key);
-    if (value) qs.set(key, value);
-  }
-  qs.set("page", String(page));
-  return qs.toString();
-}
 
 export default function SearchPage() {
   return (
@@ -31,45 +23,94 @@ export default function SearchPage() {
 
 function SearchInner() {
   const sp = useSearchParams();
-  const page = Math.max(1, Number(sp.get("page") ?? "1") || 1);
-  const qs = buildQuery(sp, page);
-  const { data, error } = useQuery<SearchResponse>(`/search?${qs}`);
+  const [state, setState] = useState<FilterState>(() =>
+    stateFromParams(new URLSearchParams(sp.toString())));
+  const [page, setPage] = useState(() => Math.max(1, Number(sp.get("page")) || 1));
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const defaults = Object.fromEntries(FILTER_KEYS.map((k) => [k, sp.get(k) ?? ""]));
-  const exportUrl = `/api/export?format=csv&${buildQuery(sp, 1).replace(/&?page=1/, "")}`;
+  const facets = useQuery<FacetsResponse>("/search/facets");
+  const institutions = useQuery<InstitutionListResponse>("/institutions");
+
+  // Real navigations (top-bar search, links, back/forward) push URL → state.
+  const spStr = sp.toString();
+  useEffect(() => {
+    const p = new URLSearchParams(spStr);
+    setState(stateFromParams(p));
+    setPage(Math.max(1, Number(p.get("page")) || 1));
+  }, [spStr]);
+
+  // State → URL so filtered views are shareable. replaceState does not
+  // re-trigger this effect (useSearchParams only tracks real navigations).
+  const filterQs = paramsFromState(state).toString();
+  useEffect(() => {
+    const qs = new URLSearchParams(filterQs);
+    if (page > 1) qs.set("page", String(page));
+    const url = qs.toString() ? `?${qs}` : window.location.pathname;
+    window.history.replaceState(null, "", url);
+  }, [filterQs, page]);
+
+  const debouncedQs = useDebounced(filterQs, 300);
+  const qs = new URLSearchParams(debouncedQs);
+  qs.set("page", String(page));
+  const { data, error } = useQuery<SearchResponse>(`/search?${qs.toString()}`);
+
+  const change = (next: FilterState) => { setState(next); setPage(1); };
+  const chips = chipsFromState(state);
+  const exportUrl = `/api/export?format=csv&${filterQs}`;
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Search</h1>
-      <FilterBar defaults={defaults} />
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-600">
-          {data ? `${data.total.toLocaleString()} runs` : "…"}
-        </p>
-        <a href={exportUrl} className="rounded border bg-white px-3 py-1 text-sm hover:bg-gray-100">
-          Export CSV
-        </a>
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-bold">Search</h1>
+        <div className="flex items-center gap-2">
+          <a className="btn" href={exportUrl}>Export CSV</a>
+          <FilterButton count={countActiveFilters(state)} onClick={() => setDrawerOpen(true)} />
+        </div>
       </div>
-      {error && <p className="text-red-600">{error}</p>}
-      {!data && !error && <p>Loading…</p>}
-      {data && (
-        <>
-          <div className="overflow-x-auto rounded-lg border bg-white">
-            <RunsTable runs={data.items} />
-          </div>
-          <div className="flex gap-2 text-sm">
-            {page > 1 && (
-              <Link className="rounded border bg-white px-3 py-1"
-                href={`/search?${buildQuery(sp, page - 1)}`}>Previous</Link>
-            )}
-            {page < Math.max(1, Math.ceil(data.total / data.page_size)) && (
-              <Link className="rounded border bg-white px-3 py-1"
-                href={`/search?${buildQuery(sp, page + 1)}`}>Next</Link>
-            )}
-            <span className="px-2 py-1 text-gray-600">Page {page}</span>
-          </div>
-        </>
+
+      {chips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {chips.map((c) => (
+            <span key={c.key} className="chip">
+              {c.label}
+              <button aria-label={`Remove filter ${c.label}`}
+                onClick={() => change(removeFilter(state, c.key))}>✕</button>
+            </span>
+          ))}
+          <button className="text-xs text-[var(--text-dim)] hover:text-[var(--accent)]"
+            onClick={() => change(EMPTY_FILTERS)}>
+            Clear all
+          </button>
+        </div>
       )}
+
+      <p className="text-sm text-[var(--text-dim)]">
+        {data ? `${data.total.toLocaleString()} runs` : "…"}
+      </p>
+      {error && <p style={{ color: "var(--danger)" }}>{error}</p>}
+      <div className="card overflow-x-auto p-0">
+        {data ? <RunsTable runs={data.items} /> : <p className="p-4">Loading…</p>}
+      </div>
+
+      <div className="flex items-center gap-2 text-sm">
+        <button className="btn" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+          Previous
+        </button>
+        <button className="btn" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
+          Next
+        </button>
+        <span className="px-2 text-[var(--text-dim)]">Page {page} of {totalPages}</span>
+      </div>
+
+      <FilterDrawer
+        state={state}
+        onChange={change}
+        platforms={(facets.data?.platforms ?? []).map((p) => p.name)}
+        institutions={(institutions.data?.items ?? []).map((i) => i.name)}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+      />
     </div>
   );
 }

@@ -33,6 +33,19 @@ describe("buildWhere", () => {
     );
     expect(params).toEqual(["ILLUMINA", "KAUST", 2023, "ENA"]);
   });
+
+  it("supports bioproject, biosample, pathogen, wgs and platforms IN", () => {
+    const { clause, params } = buildWhere({
+      bioproject: "PRJNA1", biosample: "SAMN1",
+      pathogen: true, wgs: true,
+      platforms: ["ILLUMINA", "OXFORD_NANOPORE"],
+    });
+    expect(clause).toBe(
+      " WHERE platform IN (?, ?) AND bioproject_accession = ?" +
+      " AND biosample_accession = ? AND is_pathogen = 1 AND is_wgs = 1"
+    );
+    expect(params).toEqual(["ILLUMINA", "OXFORD_NANOPORE", "PRJNA1", "SAMN1"]);
+  });
 });
 
 describe("parseFilters", () => {
@@ -42,17 +55,39 @@ describe("parseFilters", () => {
       "&year_from=2019&year_to=2024&source=ENA&saudi_only=true"
     );
     expect(parseFilters(url)).toEqual({
-      q: "srr", organism: "o", platform: "p", institution: "i",
-      source: "ENA", yearFrom: 2019, yearTo: 2024, saudiOnly: true,
+      q: "srr", organism: "o", platform: "p", platforms: undefined,
+      institution: "i", bioproject: undefined, biosample: undefined,
+      source: "ENA", yearFrom: 2019, yearTo: 2024,
+      saudiOnly: true, pathogen: false, wgs: false,
     });
+  });
+
+  it("parses new params: bioproject, biosample, pathogen, wgs, platforms", () => {
+    const url = new URL(
+      "http://x/api/search?bioproject=PRJNA1&biosample=SAMN1" +
+      "&pathogen=true&wgs=true&platforms=ILLUMINA,OXFORD_NANOPORE"
+    );
+    expect(parseFilters(url)).toEqual({
+      q: undefined, organism: undefined, platform: undefined,
+      platforms: ["ILLUMINA", "OXFORD_NANOPORE"],
+      institution: undefined, bioproject: "PRJNA1", biosample: "SAMN1",
+      source: undefined, yearFrom: undefined, yearTo: undefined,
+      saudiOnly: false, pathogen: true, wgs: true,
+    });
+  });
+
+  it("drops empty platforms list", () => {
+    const url = new URL("http://x/api/search?platforms=,,");
+    expect(parseFilters(url).platforms).toBeUndefined();
   });
 
   it("defaults to empty and saudi_only only on literal 'true'", () => {
     const url = new URL("http://x/api/search");
     expect(parseFilters(url)).toEqual({
-      q: undefined, organism: undefined, platform: undefined,
-      institution: undefined, source: undefined,
-      yearFrom: undefined, yearTo: undefined, saudiOnly: false,
+      q: undefined, organism: undefined, platform: undefined, platforms: undefined,
+      institution: undefined, bioproject: undefined, biosample: undefined,
+      source: undefined, yearFrom: undefined, yearTo: undefined,
+      saudiOnly: false, pathogen: false, wgs: false,
     });
   });
 });
