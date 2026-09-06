@@ -28,7 +28,7 @@ function SamplesInner() {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   if (!acc) return <p>No BioSample accession given.</p>;
-  if (error) return <p style={{ color: "var(--danger)" }}>Sample {acc} not found.</p>;
+  if (error) return <p style={{ color: "var(--danger)" }}>{error}</p>;
   if (!data) return <p>Loading…</p>;
 
   const runs = filterRuns(data.runs, state);

@@ -22,7 +22,7 @@ function InstitutionInner() {
   );
 
   if (!name) return <p>No institution given.</p>;
-  if (error) return <p className="text-danger">Institution not found: {name}</p>;
+  if (error) return <p className="text-danger">{error}</p>;
   if (!inst) return <p>Loading…</p>;
 
   return (

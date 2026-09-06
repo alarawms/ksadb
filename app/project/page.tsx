@@ -20,7 +20,7 @@ function ProjectInner() {
   const { data: project, error } = useQuery<ProjectOut>(id ? `/projects/${id}` : null);
 
   if (!id) return <p>No BioProject accession given.</p>;
-  if (error) return <p className="text-danger">Project {id} not found.</p>;
+  if (error) return <p className="text-danger">{error}</p>;
   if (!project) return <p>Loading…</p>;
 
   return (

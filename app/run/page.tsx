@@ -57,7 +57,7 @@ function RunInner() {
   const { data: record, error } = useQuery<RecordOut>(id ? `/records/${id}` : null);
 
   if (!id) return <p>No run accession given.</p>;
-  if (error) return <p style={{ color: "var(--danger)" }}>Run {id} not found.</p>;
+  if (error) return <p style={{ color: "var(--danger)" }}>{error}</p>;
   if (!record) return <p>Loading…</p>;
 
   const bp = record.bioproject_accession;

@@ -1,5 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { json } from "./db";
+
 /**
  * Response cache for aggregate endpoints, backed by the runtime Cache API.
  *
@@ -60,4 +62,28 @@ export async function cachedJson(
     new Response(response.clone().body, { status: response.status, headers }),
   );
   return new Response(response.body, { status: response.status, headers });
+}
+
+export const DEGRADED_MESSAGE =
+  "Temporarily unavailable: the daily database read quota is exhausted and " +
+  "resets at midnight UTC. Please retry in a few minutes — aggregate " +
+  "dashboards keep serving from snapshot in the meantime.";
+
+/**
+ * Cache wrapper for detail endpoints (run record, project, sample,
+ * institution). Detail lookups have no baked-in snapshot, so when D1 rejects
+ * the query (daily quota closed) degrade to a clear 503 instead of a 500.
+ */
+export async function cachedDetail(
+  request: Request,
+  producer: () => Promise<Response>,
+): Promise<Response> {
+  try {
+    return await cachedJson(request, STATS_TTL, producer);
+  } catch {
+    return json(
+      { error: "temporarily_unavailable", message: DEGRADED_MESSAGE },
+      503,
+    );
+  }
 }
