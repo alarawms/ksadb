@@ -57,12 +57,25 @@ describe("cachedJson", () => {
     expect(cache.puts).toBe(0);
   });
 
-  it("does not cache errors thrown by the producer", async () => {
+  it("rejects errors thrown by the producer when no fallback exists", async () => {
     const cache = makeCache();
     const producer = async () => {
       throw new Error("d1 down");
     };
-    await expect(cachedJson(req, 3600, producer, cache)).rejects.toThrow("d1 down");
+    const uncached = new Request("http://x/api/does-not-exist");
+    await expect(cachedJson(uncached, 3600, producer, cache)).rejects.toThrow("d1 down");
+    expect(cache.puts).toBe(0);
+  });
+
+  it("serves the baked-in snapshot when the producer throws", async () => {
+    const cache = makeCache();
+    const producer = async () => {
+      throw new Error("quota closed");
+    };
+    const res = await cachedJson(req, 3600, producer, cache);
+    expect(res.ok).toBe(true);
+    expect(res.headers.get("x-ksadb-cache")).toBe("FALLBACK");
+    expect(res.headers.get("cache-control")).toBe("no-store");
     expect(cache.puts).toBe(0);
   });
 });

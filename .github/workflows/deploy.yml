@@ -13,15 +13,18 @@ jobs:
           cache: npm
       - run: npm ci --legacy-peer-deps
       - run: npm run build
-      - name: Apply D1 migrations
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: d1 migrations apply ksadb-db --remote
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy .next/out
+      # Applied after the Pages deploy so a quota-blocked migration never
+      # prevents updated code from going live; this step still fails the job
+      # visibly, and the retry cron re-runs the deploy to finish bookkeeping.
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply ksadb-db --remote

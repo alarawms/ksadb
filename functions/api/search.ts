@@ -1,11 +1,10 @@
-import { cachedJson } from "./_lib/cache";
+import { cachedJson, SEARCH_TTL } from "./_lib/cache";
 import { Env, json, parsePage } from "./_lib/db";
 import { RUN_COLUMNS } from "./_lib/columns";
 import { buildWhere, parseFilters } from "./_lib/filters";
 
 // Search results are cached briefly: the count query scans the runs table,
 // and explorer-style filtering can generate many requests per minute.
-const SEARCH_TTL = 60;
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   const url = new URL(request.url);

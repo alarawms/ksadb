@@ -1,8 +1,8 @@
-import { cachedJson } from "../_lib/cache";
+import { cachedJson, STATS_TTL } from "../_lib/cache";
 import { Env, json } from "../_lib/db";
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
-  return cachedJson(request, 3600, async () => {
+  return cachedJson(request, STATS_TTL, async () => {
     const { results } = await env.DB.prepare(
       "SELECT i.name, i.is_saudi, COUNT(r.run_accession) AS runs " +
       "FROM institutions i LEFT JOIN runs r ON r.institution_name = i.name " +

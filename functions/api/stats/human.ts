@@ -1,10 +1,10 @@
-import { cachedJson } from "../_lib/cache";
+import { cachedJson, STATS_TTL } from "../_lib/cache";
 import { Env, json } from "../_lib/db";
 
 const HUMAN = "organism LIKE 'Homo sapiens%'";
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
-  return cachedJson(request, 3600, async () => {
+  return cachedJson(request, STATS_TTL, async () => {
     const totals = await env.DB.prepare(
       `SELECT COUNT(*) AS total_runs, COALESCE(SUM(total_bases), 0) AS total_bases ` +
       `FROM runs WHERE ${HUMAN}`
