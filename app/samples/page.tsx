@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
 import { useQuery } from "@/lib/useQuery";
-import type { SampleOut } from "@/lib/api";
+import type { SampleListResponse, SampleOut } from "@/lib/api";
 import {
   chipsFromState, countActiveFilters, filterRuns, removeFilter,
   EMPTY_FILTERS, type FilterState,
@@ -21,13 +21,50 @@ export default function SamplesPage() {
   );
 }
 
+function TopSamples() {
+  const { data, error } = useQuery<SampleListResponse>("/samples");
+  if (error) return <p style={{ color: "var(--danger)" }}>{error}</p>;
+  if (!data) return <p>Loading…</p>;
+  return (
+    <div className="space-y-4">
+      <h1 className="text-2xl font-bold">BioSamples</h1>
+      <p className="text-sm text-[var(--text-dim)]">
+        Top {data.items.length} BioSamples by run count — click one to browse its runs.
+      </p>
+      <div className="card overflow-x-auto p-0">
+        <table className="w-full text-left text-sm">
+          <thead style={{ background: "var(--surface-2)", borderColor: "var(--border)" }} className="border-b">
+            <tr>
+              <th className="th">BioSample</th>
+              <th className="th">Projects</th>
+              <th className="th text-right">Runs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.items.map((s) => (
+              <tr key={s.accession} className="border-b hover:bg-[var(--surface-2)]"
+                style={{ borderColor: "var(--border)" }}>
+                <td className="p-2 font-mono">
+                  <Link className="link" href={`/samples?acc=${s.accession}`}>{s.accession}</Link>
+                </td>
+                <td className="p-2">{s.projects}</td>
+                <td className="p-2 text-right tabular-nums">{s.runs.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function SamplesInner() {
   const acc = useSearchParams().get("acc");
   const { data, error } = useQuery<SampleOut>(acc ? `/samples/${acc}` : null);
   const [state, setState] = useState<FilterState>(EMPTY_FILTERS);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  if (!acc) return <p>No BioSample accession given.</p>;
+  if (!acc) return <TopSamples />;
   if (error) return <p style={{ color: "var(--danger)" }}>{error}</p>;
   if (!data) return <p>Loading…</p>;
 

@@ -103,3 +103,13 @@ export interface SampleOut {
   projects: string[];
   runs: RunItem[];
 }
+
+export interface SampleListItem {
+  accession: string;
+  runs: number;
+  projects: number;
+}
+
+export interface SampleListResponse {
+  items: SampleListItem[];
+}
