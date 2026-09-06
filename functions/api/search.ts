@@ -11,22 +11,35 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   const { clause, params } = buildWhere(parseFilters(url));
   const { page, pageSize } = parsePage(url);
 
-  return cachedJson(request, SEARCH_TTL, async () => {
-    const total = await env.DB.prepare(`SELECT COUNT(*) AS c FROM runs${clause}`)
-      .bind(...params)
-      .first<{ c: number }>();
+  try {
+    return await cachedJson(request, SEARCH_TTL, async () => {
+      const total = await env.DB.prepare(`SELECT COUNT(*) AS c FROM runs${clause}`)
+        .bind(...params)
+        .first<{ c: number }>();
 
-    const { results } = await env.DB.prepare(
-      `SELECT ${RUN_COLUMNS} FROM runs${clause} ` +
-      "ORDER BY published_dt IS NULL, published_dt DESC, run_accession " +
-      "LIMIT ? OFFSET ?"
-    ).bind(...params, pageSize, (page - 1) * pageSize).all();
+      const { results } = await env.DB.prepare(
+        `SELECT ${RUN_COLUMNS} FROM runs${clause} ` +
+        "ORDER BY published_dt IS NULL, published_dt DESC, run_accession " +
+        "LIMIT ? OFFSET ?"
+      ).bind(...params, pageSize, (page - 1) * pageSize).all();
 
-    return json({
-      total: total?.c ?? 0,
-      page,
-      page_size: pageSize,
-      items: results,
+      return json({
+        total: total?.c ?? 0,
+        page,
+        page_size: pageSize,
+        items: results,
+      });
     });
-  });
+  } catch (err) {
+    // cachedJson already tried the snapshot fallback for this URL; nothing
+    // baked in means this filter combination has no snapshot. Degrade to a
+    // clear 503 instead of a bare 500 so the UI can explain the situation.
+    return json({
+      error: "temporarily_unavailable",
+      message:
+        "Run search is temporarily unavailable: the daily database read quota " +
+        "is exhausted and resets at midnight UTC. The default run list and " +
+        "all aggregate dashboards still serve from snapshot.",
+    }, 503);
+  }
 };

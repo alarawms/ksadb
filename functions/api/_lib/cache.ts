@@ -12,8 +12,8 @@ import { fallbackFor } from "./fallback";
 
 /** TTL for aggregate endpoints (stats, pathogens, facets, institutions). */
 export const STATS_TTL = 21600; // 6h — data only changes via the daily sync
-/** TTL for search listing responses. */
-export const SEARCH_TTL = 60;
+/** TTL for search listing responses (30 min — data only changes via the daily sync). */
+export const SEARCH_TTL = 1800;
 
 export interface CacheLike {
   match(key: Request | string): Promise<Response | undefined>;

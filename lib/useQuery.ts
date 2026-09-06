@@ -22,7 +22,21 @@ export function useQuery<T>(path: string | null): QueryState<T> {
     setState({ data: null, error: null, loading: true });
     fetch(`/api${path}`, { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`API ${path} -> ${res.status}`);
+        if (!res.ok) {
+          let message = `API ${path} -> ${res.status}`;
+          try {
+            const body: unknown = await res.json();
+            if (
+              body && typeof body === "object" &&
+              typeof (body as { message?: unknown }).message === "string"
+            ) {
+              message = (body as { message: string }).message;
+            }
+          } catch {
+            // non-JSON error body — keep the status-based message
+          }
+          throw new Error(message);
+        }
         return res.json();
       })
       .then((data: unknown) => {
