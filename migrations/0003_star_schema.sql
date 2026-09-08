@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS samples (
 CREATE TABLE IF NOT EXISTS ena_runs (
   run_accession TEXT PRIMARY KEY,
   study_accession TEXT NOT NULL REFERENCES studies(accession),
-  biosample_accession TEXT REFERENCES samples(accession),
+  biosample_accession TEXT REFERENCES samples(biosample_accession),
   bytes INTEGER,
   spots INTEGER,
   platform TEXT,
