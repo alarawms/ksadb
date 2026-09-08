@@ -113,3 +113,38 @@ export interface SampleListItem {
 export interface SampleListResponse {
   items: SampleListItem[];
 }
+
+export interface V2Run {
+  run_accession: string;
+  study_accession: string;
+  biosample_accession: string | null;
+  bytes: number | null;
+  spots: number | null;
+  platform: string | null;
+  instrument_model: string | null;
+  library_strategy: string | null;
+  submitted_date: string | null;
+  fastq_ftp: string | null;
+  fastq_bytes: string | null;
+  organism: string | null;
+  country: string | null;
+  region: string | null;
+  host: string | null;
+  submitter: string | null;
+  study_title: string | null;
+}
+
+export interface V2SearchResponse {
+  total: number;
+  page: number;
+  page_size: number;
+  items: V2Run[];
+}
+
+export interface V2FacetsResponse {
+  countries: { name: string; runs: number }[];
+  platforms: { name: string; runs: number }[];
+  strategies: { name: string; runs: number }[];
+  submitters: { name: string; runs: number }[];
+  organisms: { name: string; runs: number }[];
+}
