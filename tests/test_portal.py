@@ -45,3 +45,35 @@ def test_fetch_country_gives_up_after_six_failures():
     http = FakeHttp([], fail_first=99)
     with pytest.raises(PortalError):
         fetch_country("Saudi Arabia", http=http)
+
+
+class QueryRecordingHttp:
+    """Records the last request params and serves one empty page."""
+
+    def __init__(self):
+        self.params = None
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.params = params
+
+        class EmptyResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return []
+
+        return EmptyResponse()
+
+
+def test_fetch_country_without_since_queries_country_only():
+    http = QueryRecordingHttp()
+    fetch_country("Saudi Arabia", http=http)
+    assert http.params["query"] == 'country="Saudi Arabia"'
+
+
+def test_fetch_country_adds_last_updated_clause_when_since_given():
+    http = QueryRecordingHttp()
+    fetch_country("Saudi Arabia", http=http, since="2026-09-01 00:00:00")
+    assert http.params["query"] == (
+        'country="Saudi Arabia" AND last_updated>="2026-09-01 00:00:00"')
