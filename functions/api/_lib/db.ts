@@ -2,6 +2,9 @@
 
 export interface Env {
   DB: D1Database;
+  AGGREGATES: R2Bucket;
+  STUDIES_INDEX: VectorizeIndex;
+  AI: Ai;
 }
 
 export function json(data: unknown, status = 200): Response {
