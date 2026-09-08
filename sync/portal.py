@@ -8,7 +8,7 @@ PORTAL_FIELDS = (
     "study_title,experiment_title,sample_title,sample_description,"
     "scientific_name,tax_id,library_strategy,library_source,instrument_platform,"
     "instrument_model,center_name,first_public,country,collection_date,location,"
-    "host,tissue,fastq_ftp,fastq_md5,fastq_bytes,read_count,base_count"
+    "host,fastq_ftp,fastq_md5,fastq_bytes,read_count,base_count"
 )
 COUNTRIES = {
     "SA": "Saudi Arabia", "AE": "United Arab Emirates", "QA": "Qatar",
@@ -43,7 +43,11 @@ def _get_page(http, country_value, offset, page_size):
             time.sleep(min(2 ** attempt, 30))
     raise PortalError(f"failed to fetch {country_value} offset={offset}: {last}")
 
-def fetch_country(country_value, http=requests, page_size=1000):
+def fetch_country(country_value, http=requests, page_size=1000000):
+    # ENA's portal search no longer supports offset pagination ("Unsupported
+    # param offset"), but accepts very large limits, so a single request per
+    # country returns the full slice; the pagination loop below then exits
+    # after the first page.
     rows, offset = [], 0
     while True:
         page = _get_page(http, country_value, offset, page_size)
