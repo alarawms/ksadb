@@ -35,7 +35,10 @@ class RawSQL:
 
 def _upsert(table, columns, row, conflict):
     cols = ", ".join(columns)
-    vals = ", ".join(str(row.get(c)) for c in columns)
+    vals = ", ".join(
+        str(v) if isinstance(v, RawSQL) else sql_literal(v)
+        for v in (row.get(c) for c in columns)
+    )
     updates = ", ".join(f"{c} = excluded.{c}" for c in columns)
     return (f"INSERT INTO {table} ({cols}) VALUES ({vals}) "
             f"ON CONFLICT({conflict}) DO UPDATE SET {updates}")
@@ -65,13 +68,24 @@ def build_statements(entities: list[dict]) -> list[str]:
     return stmts
 
 
-def push_star(entities: list[dict], *, account_id=None, database_id=None,
-              api_token=None, base_url=DEFAULT_BASE_URL, http=requests,
+def push_star(items, account_id=None, database_id=None, api_token=None,
+              base_url=DEFAULT_BASE_URL, http=requests,
               batch: int = DEFAULT_BATCH) -> dict:
+    """POST statements to D1 in batches.
+
+    `items` is either a list of entity dicts (statements are built via
+    `build_statements`) or a list of pre-built SQL statement strings,
+    detected by the type of the first element.
+    """
     url = (f"{base_url}/accounts/{account_id}"
            f"/d1/database/{database_id}/query")
     headers = {"Authorization": f"Bearer {api_token}"}
-    statements = build_statements(entities)
+    if items and isinstance(items[0], dict):
+        statements = build_statements(items)
+        n_entities = len(items)
+    else:
+        statements = list(items)
+        n_entities = None
     for i in range(0, len(statements), batch):
         chunk = statements[i:i + batch]
         resp = http.post(url, headers=headers,
@@ -87,7 +101,7 @@ def push_star(entities: list[dict], *, account_id=None, database_id=None,
             time.sleep(BATCH_SLEEP)
     return {"statements": len(statements),
             "batches": (len(statements) + batch - 1) // batch,
-            "entities": len(entities)}
+            "entities": n_entities}
 
 
 def write_sql_files(statements: list[str], out_dir, chunk: int = DEFAULT_FILE_CHUNK) -> list[Path]:

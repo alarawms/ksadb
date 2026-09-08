@@ -85,6 +85,16 @@ def test_submitter_inserted_once_per_center_name():
     assert sum("INSERT OR IGNORE INTO submitters" in s for s in stmts) == 1
 
 
+def test_value_quoting_and_null_rendering():
+    sql = "\n".join(build_statements([_entity()]))
+    assert ("VALUES ('PRJEB1', 'T', 'A', "
+            "(SELECT id FROM submitters WHERE center_name = 'KAUST'), "
+            "'2025-01-01')") in sql
+    assert ("VALUES ('SAMEA1', 'Homo sapiens', 9606, NULL, NULL, 'SA', "
+            "'GCC', NULL, NULL)") in sql
+    assert "VALUES ('ERR1', 'PRJEB1', 'SAMEA1', 10, 1, 'ILLUMINA', NULL" in sql
+
+
 def test_missing_optional_entities():
     stmts = build_statements([{"submitter": {"center_name": "KAUST"}}])
     assert len(stmts) == 1
@@ -102,6 +112,18 @@ def test_push_star_batches_and_stats(d1_server):
     assert all(len(r["body"]["batch"]) <= 4 for r in received)
     assert all(r["auth"] == "Bearer tok" for r in received)
     assert all(r["body"]["batch"][0]["sql"] for r in received)
+
+
+def test_push_star_accepts_prebuilt_statements(d1_server):
+    base_url, received, _ = d1_server
+    stmts = ["INSERT OR IGNORE INTO submitters (center_name) VALUES ('KAUST')",
+             "DELETE FROM ena_runs"]
+    stats = push_star(stmts, "acc", "db", "tok", base_url=base_url, batch=1)
+    assert stats["statements"] == 2
+    assert stats["entities"] is None
+    assert stats["batches"] == 2 == len(received)
+    posted = [s["sql"] for r in received for s in r["body"]["batch"]]
+    assert posted == stmts
 
 
 def test_push_star_raises_on_d1_error(d1_server):
