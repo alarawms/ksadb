@@ -3,6 +3,7 @@ import os
 
 import requests
 
+from sync.aggregate import run_aggregates
 from sync.d1_push import (DEFAULT_BASE_URL, D1Error, push_rows, sql_literal,
                           write_sql_files)
 from sync.fetch import pull_rows
@@ -111,6 +112,16 @@ def cmd_pull_v2(args):
                             api_token=os.environ["D1_API_TOKEN"])
 
 
+def cmd_aggregate(args):
+    paths = run_aggregates(
+        account_id=os.environ["D1_ACCOUNT_ID"],
+        database_id=os.environ["D1_DATABASE_ID"],
+        api_token=os.environ["D1_API_TOKEN"],
+        out_dir=args.out_dir,
+    )
+    print(f"aggregates written: {len(paths)} files -> {args.out_dir}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ksadb-sync")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -122,6 +133,8 @@ def main(argv=None):
     p_v2 = sub.add_parser("pull-v2")
     p_v2.add_argument("--country", action="append")
     p_v2.add_argument("--dry-run", action="store_true")
+    p_agg = sub.add_parser("aggregate")
+    p_agg.add_argument("--out-dir", required=True)
     args = parser.parse_args(argv)
 
     if args.command == "seed":
@@ -130,6 +143,8 @@ def main(argv=None):
         _deliver(rows_from_csv(args.from_csv), mode="seed")
     elif args.command == "pull-v2":
         cmd_pull_v2(args)
+    elif args.command == "aggregate":
+        cmd_aggregate(args)
     else:
         _deliver(pull_rows(), mode="pull")
 
