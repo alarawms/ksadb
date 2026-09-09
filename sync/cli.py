@@ -51,6 +51,16 @@ def _d1_query(sql, *, account_id, database_id, api_token) -> dict:
     return body
 
 
+def _env_int(name):
+    raw = os.getenv(name)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def _existing_runs(*, account_id, database_id, api_token) -> set:
     """All run accessions currently in ena_runs (for resume de-dup)."""
     body = _d1_query("SELECT run_accession FROM ena_runs",
@@ -120,8 +130,21 @@ def cmd_pull_v2(args):
     rows = filter_new_rows(rows, existing)
     if before - len(rows):
         print(f"resume: skipping {before - len(rows)} runs already in D1")
-        entities = [row_to_entities(r) for r in rows]
-        stmts = build_statements(entities)
+    # Nightly write-budget cap: push at most this many NEW runs per night.
+    # The resume logic picks up where the previous night stopped, so the
+    # bootstrap fills gradually; raise or unset V2_MAX_RUNS to scale up.
+    max_runs = args.max_runs or _env_int("V2_MAX_RUNS")
+    if max_runs is not None and len(rows) > max_runs:
+        print(f"capping tonight's push at {max_runs} of {len(rows)} new runs")
+        rows = rows[:max_runs]
+        capped = True
+    else:
+        capped = False
+    if not rows:
+        print("nothing new to push")
+        return
+    entities = [row_to_entities(r) for r in rows]
+    stmts = build_statements(entities)
     stats = push_star(stmts, account_id=os.environ["D1_ACCOUNT_ID"],
                       database_id=os.environ["D1_DATABASE_ID"],
                       api_token=os.environ["D1_API_TOKEN"])
@@ -129,8 +152,10 @@ def cmd_pull_v2(args):
     # Advance the watermark only after a successful push, and only to the
     # newest row actually fetched — a run with zero changed rows leaves it
     # untouched so the next run re-scans the same window. Uses all_rows (not
-    # the resume-filtered subset) so a resumed run never regresses it.
-    updated = [r.get("last_updated") for r in all_rows if r.get("last_updated")]
+    # the resume-filtered subset) so a resumed run never regresses it. On a
+    # CAPPED run the tail is deliberately unpushed, so advancing would skip
+    # it forever — leave the watermark for the next night.
+    updated = [] if capped else [r.get("last_updated") for r in all_rows if r.get("last_updated")]
     if updated:
         _write_v2_watermark(max(updated), account_id=os.environ["D1_ACCOUNT_ID"],
                             database_id=os.environ["D1_DATABASE_ID"],
@@ -158,6 +183,9 @@ def main(argv=None):
     p_v2 = sub.add_parser("pull-v2")
     p_v2.add_argument("--country", action="append")
     p_v2.add_argument("--dry-run", action="store_true")
+    p_v2.add_argument("--max-runs", type=int, default=None,
+                      help="cap new runs pushed tonight (bootstrap pacing; "
+                           "the resume logic continues next run)")
     p_agg = sub.add_parser("aggregate")
     p_agg.add_argument("--out-dir", required=True)
     sub.add_parser("embed")

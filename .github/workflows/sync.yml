@@ -5,6 +5,10 @@ on:
   workflow_dispatch:
 jobs:
   sync:
+    # The v1 full re-push costs ~47k row writes; it only needs to run from
+    # the scheduled nightly cron (once). Manual/branch dispatches skip it —
+    # the v2 job below is what they exist to trigger.
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +36,10 @@ jobs:
           D1_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
           D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          # Free-tier write budget is 100k rows/day and the scheduled v1 job
+          # uses ~47k of it, so pace the v2 bootstrap: ~40k new runs/night,
+          # resumed automatically each night. Raise/unset to scale up.
+          V2_MAX_RUNS: "40000"
       - name: Precompute aggregates
         run: python -m sync.cli aggregate --out-dir aggregates
         env:
