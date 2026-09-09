@@ -6,6 +6,7 @@ import requests
 from sync.aggregate import run_aggregates
 from sync.d1_push import (DEFAULT_BASE_URL, D1Error, push_rows, sql_literal,
                           write_sql_files)
+from sync.embed import cmd_embed
 from sync.fetch import pull_rows
 from sync.loader import rows_from_csv
 from sync.portal import COUNTRIES, fetch_country
@@ -135,6 +136,7 @@ def main(argv=None):
     p_v2.add_argument("--dry-run", action="store_true")
     p_agg = sub.add_parser("aggregate")
     p_agg.add_argument("--out-dir", required=True)
+    sub.add_parser("embed")
     args = parser.parse_args(argv)
 
     if args.command == "seed":
@@ -145,6 +147,8 @@ def main(argv=None):
         cmd_pull_v2(args)
     elif args.command == "aggregate":
         cmd_aggregate(args)
+    elif args.command == "embed":
+        cmd_embed()
     else:
         _deliver(pull_rows(), mode="pull")
 

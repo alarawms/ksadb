@@ -55,3 +55,10 @@ jobs:
             r2 object put ksadb-aggregates/aggregates/by-submitter.json --file aggregates/by-submitter.json --content-type application/json --force
             r2 object put ksadb-aggregates/aggregates/by-platform.json --file aggregates/by-platform.json --content-type application/json --force
             r2 object put ksadb-aggregates/aggregates/by-strategy.json --file aggregates/by-strategy.json --content-type application/json --force
+      - name: Embed new studies into Vectorize
+        run: python -m sync.cli embed
+        env:
+          D1_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
