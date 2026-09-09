@@ -11,7 +11,7 @@ from sync.fetch import pull_rows
 from sync.loader import rows_from_csv
 from sync.portal import COUNTRIES, fetch_country
 from sync.star import row_to_entities
-from sync.star_push import build_statements, push_star, write_sql_files as write_star_sql_files
+from sync.star_push import build_statements, filter_new_rows, push_star, write_sql_files as write_star_sql_files
 
 V2_WATERMARK_KEY = "v2_last_sync"
 
@@ -49,6 +49,15 @@ def _d1_query(sql, *, account_id, database_id, api_token) -> dict:
     if not body.get("success"):
         raise D1Error(f"D1 query failed: {body.get('errors')}")
     return body
+
+
+def _existing_runs(*, account_id, database_id, api_token) -> set:
+    """All run accessions currently in ena_runs (for resume de-dup)."""
+    body = _d1_query("SELECT run_accession FROM ena_runs",
+                     account_id=account_id, database_id=database_id,
+                     api_token=api_token)
+    return {r["run_accession"]
+            for res in body.get("result", []) for r in res.get("results", [])}
 
 
 def _read_v2_watermark(*, account_id, database_id, api_token):
@@ -99,14 +108,29 @@ def cmd_pull_v2(args):
         files = write_star_sql_files(stmts, out_dir)
         print(f"sql written: {len(files)} files -> {out_dir}")
         return
+    # Resume (real push path only): drop entities whose run is already in D1
+    # (e.g. a previous run died mid-push). Keeps re-runs inside the daily
+    # write budget. Safe for FKs: batches apply as a strict prefix, so any
+    # run already in D1 has its study/sample rows already in D1 too.
+    existing = _existing_runs(account_id=os.environ["D1_ACCOUNT_ID"],
+                              database_id=os.environ["D1_DATABASE_ID"],
+                              api_token=os.environ["D1_API_TOKEN"])
+    all_rows = rows
+    before = len(rows)
+    rows = filter_new_rows(rows, existing)
+    if before - len(rows):
+        print(f"resume: skipping {before - len(rows)} runs already in D1")
+        entities = [row_to_entities(r) for r in rows]
+        stmts = build_statements(entities)
     stats = push_star(stmts, account_id=os.environ["D1_ACCOUNT_ID"],
                       database_id=os.environ["D1_DATABASE_ID"],
                       api_token=os.environ["D1_API_TOKEN"])
     print(f"push done: {stats}")
     # Advance the watermark only after a successful push, and only to the
     # newest row actually fetched — a run with zero changed rows leaves it
-    # untouched so the next run re-scans the same window.
-    updated = [r.get("last_updated") for r in rows if r.get("last_updated")]
+    # untouched so the next run re-scans the same window. Uses all_rows (not
+    # the resume-filtered subset) so a resumed run never regresses it.
+    updated = [r.get("last_updated") for r in all_rows if r.get("last_updated")]
     if updated:
         _write_v2_watermark(max(updated), account_id=os.environ["D1_ACCOUNT_ID"],
                             database_id=os.environ["D1_DATABASE_ID"],

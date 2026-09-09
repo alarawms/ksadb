@@ -68,6 +68,15 @@ def build_statements(entities: list[dict]) -> list[str]:
     return stmts
 
 
+def filter_new_rows(rows: list[dict], existing_runs: set) -> list[dict]:
+    """Drop fetch rows whose run accession is already in D1 (resume support).
+
+    `existing_runs` is a set of run_accession strings already present in the
+    ena_runs table.
+    """
+    return [r for r in rows if r.get("run_accession") not in existing_runs]
+
+
 def push_star(items, account_id=None, database_id=None, api_token=None,
               base_url=DEFAULT_BASE_URL, http=requests,
               batch: int = DEFAULT_BATCH) -> dict:
@@ -90,7 +99,11 @@ def push_star(items, account_id=None, database_id=None, api_token=None,
         chunk = statements[i:i + batch]
         resp = http.post(url, headers=headers,
                          json={"batch": [{"sql": s} for s in chunk]}, timeout=120)
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            raise D1Error(
+                f"D1 batch HTTP {resp.status_code} at statements {i}-{i + len(chunk) - 1}: "
+                f"{resp.text[:500]} | first stmt: {chunk[0][:200]}"
+            )
         body = resp.json()
         if not body.get("success"):
             raise D1Error(f"D1 query failed: {body.get('errors')}")

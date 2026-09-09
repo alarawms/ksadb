@@ -31,6 +31,7 @@ def test_pull_v2_passes_since_to_fetch(monkeypatch, capsys):
     monkeypatch.setattr("sync.cli.pull_portal_slice", fake_slice)
     monkeypatch.setattr("sync.cli._read_v2_watermark",
                         lambda **kw: "2026-09-01 00:00:00")
+    monkeypatch.setattr("sync.cli._existing_runs", lambda **kw: set())
     monkeypatch.setattr("sync.cli.push_star",
                         lambda stmts, **kw: {"statements": 0, "entities": None})
     main(["pull-v2"])
@@ -50,6 +51,7 @@ def test_pull_v2_bootstrap_when_no_watermark(monkeypatch):
     monkeypatch.setenv("D1_API_TOKEN", "token")
     monkeypatch.setattr("sync.cli.pull_portal_slice", fake_slice)
     monkeypatch.setattr("sync.cli._read_v2_watermark", lambda **kw: None)
+    monkeypatch.setattr("sync.cli._existing_runs", lambda **kw: set())
     monkeypatch.setattr("sync.cli.push_star",
                         lambda stmts, **kw: {"statements": 0, "entities": None})
     main(["pull-v2"])

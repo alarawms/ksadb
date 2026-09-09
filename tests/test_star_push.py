@@ -135,6 +135,31 @@ def test_push_star_raises_on_d1_error(d1_server):
                   api_token="t", base_url=base_url)
 
 
+def test_push_star_includes_error_body_on_http_400():
+    from sync.d1_push import D1Error
+
+    class Resp:
+        status_code = 400
+        text = '{"errors": [{"code": 7500, "message": "FOREIGN KEY constraint failed"}]}'
+
+    class Http:
+        def post(self, *a, **k):
+            return Resp()
+
+    with pytest.raises(D1Error, match="FOREIGN KEY constraint failed"):
+        push_star([_entity()], account_id="a", database_id="d",
+                  api_token="t", http=Http())
+
+
+def test_filter_new_rows():
+    from sync.star_push import filter_new_rows
+    rows = [{"run_accession": "ERR1"}, {"run_accession": "ERR2"},
+            {"run_accession": "ERR3"}, {}]
+    kept = filter_new_rows(rows, {"ERR2"})
+    assert [r.get("run_accession") for r in kept] == ["ERR1", "ERR3", None]
+    assert filter_new_rows(rows, set()) == rows
+
+
 def test_write_sql_files(tmp_path):
     stmts = build_statements([_entity()])
     files = write_sql_files(stmts, tmp_path, chunk=2)
