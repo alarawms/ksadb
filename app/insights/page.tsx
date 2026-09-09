@@ -54,13 +54,14 @@ export default function InsightsPage() {
 
       <ChartCard query={summary} title="Overview">
         {(s) => (
+          // summary.json can be `{}` before the first sync — fall back to 0s.
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <StatCard label="Runs" value={s.runs.toLocaleString()} />
-            <StatCard label="Studies" value={s.studies.toLocaleString()} />
-            <StatCard label="Samples" value={s.samples.toLocaleString()} />
+            <StatCard label="Runs" value={(s.runs ?? 0).toLocaleString()} />
+            <StatCard label="Studies" value={(s.studies ?? 0).toLocaleString()} />
+            <StatCard label="Samples" value={(s.samples ?? 0).toLocaleString()} />
             <StatCard
               label="Total size (Gb)"
-              value={(s.bytes / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+              value={((s.bytes ?? 0) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })}
             />
           </div>
         )}

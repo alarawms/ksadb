@@ -7,7 +7,7 @@ import { Suspense, useCallback, useMemo, useState } from "react";
 import { RunTableV2, toCollectionItem } from "@/components/RunTableV2";
 import type { V2StudyDetail } from "@/lib/api";
 import {
-  loadCollection, saveCollection, toggleItem, type CollectionItem,
+  addItems, loadCollection, saveCollection, toggleItem, type CollectionItem,
 } from "@/lib/collection";
 import { useQuery } from "@/lib/useQuery";
 
@@ -44,10 +44,7 @@ function StudyInner() {
 
   const addAll = () => {
     setCollection((prev) => {
-      let next = prev;
-      for (const run of study.runs) {
-        next = toggleItem(next, toCollectionItem(run));
-      }
+      const next = addItems(prev, study.runs.map(toCollectionItem));
       saveCollection(next);
       return next;
     });

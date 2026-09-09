@@ -21,6 +21,12 @@ export function toggleItem(items: CollectionItem[], item: CollectionItem): Colle
     ? items.filter((i) => i.accession !== item.accession)
     : [...items, item];
 }
+// Add-only accumulation: append items whose accession is not already present,
+// never remove (used by "Add all runs to collection").
+export function addItems(items: CollectionItem[], toAdd: CollectionItem[]): CollectionItem[] {
+  const present = new Set(items.map((i) => i.accession));
+  return [...items, ...toAdd.filter((i) => !present.has(i.accession))];
+}
 export function collectionBytes(items: CollectionItem[]): number {
   return items.reduce((n, i) => n + (i.fastq_bytes || 0), 0);
 }

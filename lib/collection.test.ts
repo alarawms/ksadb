@@ -1,6 +1,6 @@
 // lib/collection.test.ts
 import { describe, expect, it } from "vitest";
-import { collectionBytes, toggleItem, type CollectionItem } from "./collection";
+import { collectionBytes, toggleItem, addItems, type CollectionItem } from "./collection";
 
 const item = (acc: string, bytes = 1000): CollectionItem => ({
   accession: acc, type: "run", fastq_ftp: `ftp.example/${acc}.fastq.gz`,
@@ -13,6 +13,12 @@ describe("collection", () => {
     expect(one).toHaveLength(1);
     expect(toggleItem(one, item("ERR1"))).toHaveLength(0);
     expect(toggleItem(one, item("ERR2"))).toHaveLength(2);
+  });
+  it("addItems only appends missing accessions, never removes", () => {
+    const one = [item("ERR1")];
+    expect(addItems(one, [item("ERR1"), item("ERR2")])).toHaveLength(2);
+    expect(addItems(one, [item("ERR1")])).toHaveLength(1);
+    expect(addItems([], [])).toHaveLength(0);
   });
   it("sums bytes", () => {
     expect(collectionBytes([item("A", 1000), item("B", 500)])).toBe(1500);
