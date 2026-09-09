@@ -12,7 +12,7 @@ interface Props {
   onToggle: (item: CollectionItem) => void;
 }
 
-function toCollectionItem(r: V2Run): CollectionItem {
+export function toCollectionItem(r: V2Run): CollectionItem {
   return {
     accession: r.run_accession,
     type: "run",

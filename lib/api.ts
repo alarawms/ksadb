@@ -148,3 +148,28 @@ export interface V2FacetsResponse {
   submitters: { name: string; runs: number }[];
   organisms: { name: string; runs: number }[];
 }
+
+export interface V2StudyDetail {
+  accession: string;
+  title: string | null;
+  abstract: string | null;
+  submitter: string | null;
+  submitted_date: string | null;
+  runs: V2Run[];
+}
+
+// Shapes of the R2 aggregate JSON files served by /api/v2/stats/[aggregate].
+export interface V2StatsSummary {
+  runs: number;
+  studies: number;
+  samples: number;
+  bytes: number;
+  date_min: string | null;
+  date_max: string | null;
+}
+
+export interface V2MonthPoint { month: string; runs: number; bytes: number; }
+
+// by-country/by-submitter rows carry extra columns (bytes/studies); the
+// by-organism/by-platform/by-strategy rows only have { name, runs }.
+export interface V2TopRow { name: string; runs: number; bytes?: number; studies?: number; }
