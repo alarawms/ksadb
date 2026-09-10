@@ -14,7 +14,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   const { query } = (await request.json()) as { query?: string };
   if (!query || !query.trim()) return json({ error: "query required" }, 400);
   try {
-    const out = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    const out = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
       messages: [{ role: "user", content: PROMPT(query.trim()) }],
       max_tokens: 200,
     });

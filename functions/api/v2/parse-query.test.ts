@@ -39,7 +39,7 @@ describe("POST /api/v2/parse-query", () => {
     expect(body.filters.country).toBe("SA");
     expect(body.filters.from).toBe("2022-01-01");
     // Workers AI got the llama model with the trimmed query
-    expect(env.aiCalls[0][0]).toBe("@cf/meta/llama-3.1-8b-instruct");
+    expect(env.aiCalls[0][0]).toBe("@cf/meta/llama-3.1-8b-instruct-fp8");
     const opts = env.aiCalls[0][1] as {
       max_tokens: number;
       messages: { role: string; content: string }[];
