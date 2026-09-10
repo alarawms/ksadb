@@ -51,6 +51,9 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # wrangler-action's default wrangler (3.x) lacks `r2 object put --force`
+          # (added in 4.x) — pin to the same major as local dev.
+          wranglerVersion: "4.129.0"
           # wrangler 4.x has no `r2 object put --dir`, and wrangler-action runs
           # each line as a separate wrangler invocation (no shell), so list the
           # puts explicitly. Keys mirror the endpoint's aggregates/<name>.json.
