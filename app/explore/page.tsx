@@ -10,20 +10,15 @@ import type { V2FacetsResponse, V2SearchResponse } from "@/lib/api";
 import {
   loadCollection, saveCollection, toggleItem, type CollectionItem,
 } from "@/lib/collection";
+import {
+  semanticBadge, semanticTitle, type SemanticMatch,
+} from "@/lib/semanticMatch";
 import { useDebounced } from "@/lib/useDebounced";
 import { useQuery } from "@/lib/useQuery";
 
 const EMPTY_FACETS: V2FacetsResponse = {
   countries: [], platforms: [], strategies: [], submitters: [], organisms: [],
 };
-
-interface SemanticMatch {
-  accession: string;
-  title: string | null;
-  submitter: string | null;
-  runs: number;
-  score: number;
-}
 
 async function postJson(path: string, body: unknown): Promise<Record<string, unknown>> {
   const res = await fetch(path, {
@@ -150,10 +145,11 @@ export default function ExplorePage() {
           <h2 className="font-semibold">Semantically similar studies</h2>
           {matches.map((m) => (
             <div key={m.accession} className="flex items-baseline gap-2 text-sm">
+              <span className="shrink-0 badge">{semanticBadge(m.type)}</span>
               <Link className="link shrink-0 font-mono" href={`/study?id=${m.accession}`}>
                 {m.accession}
               </Link>
-              <span className="truncate">{m.title ?? "—"}</span>
+              <span className="truncate">{semanticTitle(m)}</span>
               <span className="shrink-0 text-[var(--text-dim)]">{m.submitter ?? "—"}</span>
               <span className="ml-auto shrink-0 badge">{m.score.toFixed(2)}</span>
             </div>
