@@ -142,7 +142,7 @@ export default function ExplorePage() {
 
       {matches.length > 0 && (
         <div className="card space-y-2 p-4">
-          <h2 className="font-semibold">Semantically similar studies</h2>
+          <h2 className="font-semibold">Semantically similar records</h2>
           {matches.map((m) => (
             <div key={m.accession} className="flex items-baseline gap-2 text-sm">
               <span className="shrink-0 badge">{semanticBadge(m.type)}</span>
