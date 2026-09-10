@@ -129,7 +129,7 @@ def cmd_embed():
         for i in range(0, len(stmts), 25):
             requests.post(base, headers=h,
                           json={"batch": [{"sql": s} for s in stmts[i:i + 25]]}, timeout=120).raise_for_status()
-        print(f"embedded {len(pending)} {spec['type']}s")
+        print(f"embedded {len(pending)} {spec['type']} entities")
         total += len(pending)
     if not total:
         print("nothing to embed")

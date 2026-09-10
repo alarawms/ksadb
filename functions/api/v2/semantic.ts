@@ -33,6 +33,7 @@ function resolutionSql(type: string, placeholders: string): string | null {
   if (type === "run") {
     return (
       "SELECT r.run_accession AS accession, st.title AS label, s.organism, " +
+      // a run match is a single run by definition; keep the shared match shape
       "sub.center_name AS submitter, 1 AS runs " +
       "FROM ena_runs r " +
       "JOIN studies st ON st.accession = r.study_accession " +
