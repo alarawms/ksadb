@@ -29,7 +29,8 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     // country must be a 2-letter ISO code we serve — else drop it
     if (filters.country && !/^[A-Z]{2}$/.test(filters.country)) delete filters.country;
     return json({ filters });
-  } catch {
+  } catch (err) {
+    console.error("parse-query failed:", err);
     return json({ filters: {} });
   }
 };
