@@ -1,17 +1,25 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useState } from "react";
 
-import { useQuery } from "@/lib/useQuery";
-import { useDebounced } from "@/lib/useDebounced";
+import { CollectionBar } from "@/components/CollectionBar";
+import { RunTableV2 } from "@/components/RunTableV2";
+import { V2Filters } from "@/components/V2Filters";
+import type { V2FacetsResponse, V2SearchResponse } from "@/lib/api";
 import {
-  chipsFromState, countActiveFilters, paramsFromState, removeFilter,
-  stateFromParams, EMPTY_FILTERS, type FilterState,
-} from "@/lib/filterState";
-import type { FacetsResponse, InstitutionListResponse, SearchResponse } from "@/lib/api";
-import { FilterButton, FilterDrawer } from "@/components/FilterDrawer";
-import { RunsTable } from "@/components/RunsTable";
+  loadCollection, saveCollection, toggleItem, type CollectionItem,
+} from "@/lib/collection";
+import { useDebounced } from "@/lib/useDebounced";
+import { useQuery } from "@/lib/useQuery";
+
+// Saudi scope: country=SA by default (the stack holds the ENA Saudi slice;
+// NULL-country samples appear only when the user clears the Country filter).
+const DEFAULT_FILTERS: Record<string, string> = { country: "SA" };
+
+const EMPTY_FACETS: V2FacetsResponse = {
+  countries: [], platforms: [], strategies: [], submitters: [], organisms: [],
+};
 
 export default function SearchPage() {
   return (
@@ -23,74 +31,66 @@ export default function SearchPage() {
 
 function SearchInner() {
   const sp = useSearchParams();
-  const [state, setState] = useState<FilterState>(() =>
-    stateFromParams(new URLSearchParams(sp.toString())));
+  const [filters, setFilters] = useState<Record<string, string>>(() => {
+    const init = { ...DEFAULT_FILTERS };
+    sp.forEach((v, k) => {
+      if (k !== "page" && v) init[k] = v;
+    });
+    return init;
+  });
   const [page, setPage] = useState(() => Math.max(1, Number(sp.get("page")) || 1));
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [collection, setCollection] = useState<CollectionItem[]>(loadCollection);
 
-  const facets = useQuery<FacetsResponse>("/search/facets");
-  const institutions = useQuery<InstitutionListResponse>("/institutions");
+  const facets = useQuery<V2FacetsResponse>("/v2/search/facets");
 
-  // Real navigations (top-bar search, links, back/forward) push URL → state.
-  const spStr = sp.toString();
-  useEffect(() => {
-    const p = new URLSearchParams(spStr);
-    setState(stateFromParams(p));
-    setPage(Math.max(1, Number(p.get("page")) || 1));
-  }, [spStr]);
-
-  // State → URL so filtered views are shareable. replaceState does not
-  // re-trigger this effect (useSearchParams only tracks real navigations).
-  const filterQs = paramsFromState(state).toString();
-  useEffect(() => {
-    const qs = new URLSearchParams(filterQs);
-    if (page > 1) qs.set("page", String(page));
-    const url = qs.toString() ? `?${qs}` : window.location.pathname;
-    window.history.replaceState(null, "", url);
-  }, [filterQs, page]);
-
-  const debouncedQs = useDebounced(filterQs, 300);
-  const qs = new URLSearchParams(debouncedQs);
+  const debounced = useDebounced(filters, 300);
+  const qs = new URLSearchParams(debounced);
   qs.set("page", String(page));
-  const { data, error } = useQuery<SearchResponse>(`/search?${qs.toString()}`);
+  const { data, error } = useQuery<V2SearchResponse>(`/v2/search?${qs.toString()}`);
 
-  const change = (next: FilterState) => { setState(next); setPage(1); };
-  const chips = chipsFromState(state);
-  const exportUrl = `/api/export?format=csv&${filterQs}`;
+  const inCollection = new Set(collection.map((c) => c.accession));
+  const onToggle = (item: CollectionItem) => {
+    setCollection((prev) => {
+      const next = toggleItem(prev, item);
+      saveCollection(next);
+      return next;
+    });
+  };
+  const change = (next: Record<string, string>) => {
+    setPage(1);
+    setFilters(next);
+  };
+
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">Search</h1>
-        <div className="flex items-center gap-2">
-          <a className="btn" href={exportUrl}>Export CSV</a>
-          <FilterButton count={countActiveFilters(state)} onClick={() => setDrawerOpen(true)} />
-        </div>
+        <a
+          className="btn"
+          href={`/api/export?format=csv&v2=1&${new URLSearchParams(debounced).toString()}`}
+        >
+          Export CSV
+        </a>
       </div>
 
-      {chips.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          {chips.map((c) => (
-            <span key={c.key} className="chip">
-              {c.label}
-              <button aria-label={`Remove filter ${c.label}`}
-                onClick={() => change(removeFilter(state, c.key))}>✕</button>
-            </span>
-          ))}
-          <button className="text-xs text-[var(--text-dim)] hover:text-[var(--accent)]"
-            onClick={() => change(EMPTY_FILTERS)}>
-            Clear all
-          </button>
-        </div>
-      )}
+      <V2Filters
+        value={filters}
+        onChange={change}
+        facets={facets.data ?? EMPTY_FACETS}
+      />
 
       <p className="text-sm text-[var(--text-dim)]">
         {data ? `${data.total.toLocaleString()} runs` : "…"}
       </p>
-      {error && <p style={{ color: "var(--danger)" }}>{error}</p>}
+      {error && <p className="text-danger">{error}</p>}
       <div className="card overflow-x-auto p-0">
-        {data ? <RunsTable runs={data.items} /> : <p className="p-4">Loading…</p>}
+        {data ? (
+          <RunTableV2 runs={data.items} inCollection={inCollection} onToggle={onToggle} />
+        ) : (
+          <p className="p-4">Loading…</p>
+        )}
       </div>
 
       <div className="flex items-center gap-2 text-sm">
@@ -103,14 +103,7 @@ function SearchInner() {
         <span className="px-2 text-[var(--text-dim)]">Page {page} of {totalPages}</span>
       </div>
 
-      <FilterDrawer
-        state={state}
-        onChange={change}
-        platforms={(facets.data?.platforms ?? []).map((p) => p.name)}
-        institutions={(institutions.data?.items ?? []).map((i) => i.name)}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-      />
+      <CollectionBar items={collection} />
     </div>
   );
 }
