@@ -120,7 +120,7 @@ done
 ```bash
 mkdir -p deploy/podman/.local-sql
 podman compose -f deploy/podman/compose.yml run --rm -e KSADB_D1_SQL_OUT=/sql sync pull-v2
-curl -s -X POST "http://localhost:8789/admin/apply-sql?dir=/sql"
+curl -s "http://localhost:8789/admin/apply-sql?dir=/sql"
 # mirror into wrangler local D1 (needed for /explore search + match resolution;
 # run from deploy/podman/pages-root so pages:dev sees it):
 cd deploy/podman/pages-root
