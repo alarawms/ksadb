@@ -98,3 +98,7 @@ body {
     color: var(--danger);
   }
 }
+
+.table-zebra tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
