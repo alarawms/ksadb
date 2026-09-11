@@ -5,6 +5,10 @@ export interface Env {
   AGGREGATES: R2Bucket;
   STUDIES_INDEX: VectorizeIndex;
   AI: Ai;
+  // Local-stack seams (podman compose); unset = production bindings.
+  AI_BASE_URL?: string;
+  VECTORIZE_BASE_URL?: string;
+  AGGREGATES_BASE_URL?: string;
 }
 
 export function json(data: unknown, status = 200): Response {

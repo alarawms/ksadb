@@ -45,16 +45,47 @@ function resolutionSql(type: string, placeholders: string): string | null {
   return null; // unknown type: skip
 }
 
+const EMBED_MODEL = "@cf/baai/bge-small-en-v1.5";
+
+async function embedQuery(env: Env, text: string): Promise<number[]> {
+  if (env.AI_BASE_URL) {
+    const r = await fetch(
+      `${env.AI_BASE_URL}/accounts/local/ai/run/${EMBED_MODEL}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: [text] }),
+      });
+    if (!r.ok) throw new Error(`local AI returned ${r.status}`);
+    return ((await r.json()) as { data: number[][] }).data[0];
+  }
+  const emb = await env.AI.run(EMBED_MODEL, { text: [text] });
+  return (emb as { data: number[][] }).data[0];
+}
+
+async function vectorQuery(env: Env, vector: number[]): Promise<VecMatch[]> {
+  if (env.VECTORIZE_BASE_URL) {
+    const r = await fetch(
+      `${env.VECTORIZE_BASE_URL}/accounts/local/vectorize/v2/indexes/studies-vec/query`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ vector, topK: 20, returnMetadata: "all" }),
+      });
+    if (!r.ok) throw new Error(`local vectorize returned ${r.status}`);
+    return ((await r.json()) as { matches: VecMatch[] }).matches;
+  }
+  const { matches } = (await env.STUDIES_INDEX.query(vector, {
+    topK: 20,
+    returnMetadata: "all",
+  })) as { matches: VecMatch[] };
+  return matches;
+}
+
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   const { query } = (await request.json()) as { query?: string };
   if (!query || !query.trim()) return json({ error: "query required" }, 400);
   try {
-    const emb = await env.AI.run("@cf/baai/bge-small-en-v1.5", { text: [query.trim()] });
-    const vector = (emb as { data: number[][] }).data[0];
-    const { matches } = (await env.STUDIES_INDEX.query(vector, {
-      topK: 20,
-      returnMetadata: "all",
-    })) as { matches: VecMatch[] };
+    const vector = await embedQuery(env, query.trim());
+    const matches = await vectorQuery(env, vector);
 
     const groups = new Map<string, VecMatch[]>();
     for (const m of matches) {

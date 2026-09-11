@@ -11,6 +11,13 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env, params })
   if (!ALLOWED.has(name)) return json({ error: "unknown aggregate" }, 404);
   try {
     return await cachedJson(request, STATS_TTL, async () => {
+      if (env.AGGREGATES_BASE_URL) {
+        const r = await fetch(`${env.AGGREGATES_BASE_URL}/aggregates/${name}.json`);
+        if (!r.ok) return json({ error: "aggregate not built yet" }, 404);
+        return new Response(r.body, {
+          headers: { "content-type": "application/json" },
+        });
+      }
       const obj = await env.AGGREGATES.get(`aggregates/${name}.json`);
       if (!obj) return json({ error: "aggregate not built yet" }, 404);
       return new Response(obj.body, {

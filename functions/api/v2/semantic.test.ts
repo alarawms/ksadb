@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { onRequestPost } from "./semantic";
 
@@ -174,5 +174,64 @@ describe("POST /api/v2/semantic", () => {
     const res = await post(stubEnv({ failAi: true }), { query: "camel" });
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ error: "temporarily_unavailable" });
+  });
+
+  it("uses AI_BASE_URL/VECTORIZE_BASE_URL when set (local stack)", async () => {
+    const matches = [
+      { id: "PRJLOC1", score: 0.9,
+        metadata: { type: "study", accession: "PRJLOC1" } },
+    ];
+    const embedding = [...new Array(384).fill(0.01)];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true,
+        json: async () => ({ data: [embedding] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ matches }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = stubEnv({ rowsFor: routeRows });
+    Object.assign(env, {
+      AI_BASE_URL: "http://localhost:8790",
+      VECTORIZE_BASE_URL: "http://localhost:8790",
+    });
+    const res = await post(env, { query: "camel metagenome" });
+    expect(res.status).toBe(200);
+    // local URLs served the request; the bindings were never touched
+    expect(env.aiCalls).toHaveLength(0);
+    expect(env.vecCalls).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "http://localhost:8790/accounts/local/ai/run/@cf/baai/bge-small-en-v1.5");
+    expect(String(fetchMock.mock.calls[1][0])).toBe(
+      "http://localhost:8790/accounts/local/vectorize/v2/indexes/studies-vec/query");
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves a local match accession via env.DB", async () => {
+    const matches = [
+      { id: "PRJLOC1", score: 0.9,
+        metadata: { type: "study", accession: "PRJLOC1" } },
+    ];
+    const embedding = [...new Array(384).fill(0.01)];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true,
+        json: async () => ({ data: [embedding] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ matches }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = stubEnv({
+      rowsFor: (sql) =>
+        sql.includes("FROM studies st")
+          ? [{ accession: "PRJLOC1", title: "T", organism: null,
+              submitter: "KAUST", runs: 3 }]
+          : [],
+    });
+    Object.assign(env, {
+      AI_BASE_URL: "http://localhost:8790",
+      VECTORIZE_BASE_URL: "http://localhost:8790",
+    });
+    const res = await post(env, { query: "camel metagenome" });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { matches: Record<string, unknown>[] };
+    expect(body.matches[0].accession).toBe("PRJLOC1");
+    expect(body.matches[0].type).toBe("study");
+    vi.unstubAllGlobals();
   });
 });
