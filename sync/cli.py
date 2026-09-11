@@ -4,7 +4,7 @@ import os
 import requests
 
 from sync.aggregate import run_aggregates
-from sync.d1_push import (DEFAULT_BASE_URL, D1Error, push_rows, sql_literal,
+from sync.d1_push import (D1Error, cf_base_url, push_rows, sql_literal,
                           write_sql_files)
 from sync.embed import cmd_embed
 from sync.fetch import pull_rows
@@ -27,6 +27,7 @@ def _deliver(rows: list[dict], mode: str) -> None:
         account_id=os.environ["D1_ACCOUNT_ID"],
         database_id=os.environ["D1_DATABASE_ID"],
         api_token=os.environ["D1_API_TOKEN"],
+        base_url=cf_base_url(),
     )
     print(f"push done: {stats}")
 
@@ -39,8 +40,11 @@ def pull_portal_slice(countries=None, since=None) -> list[dict]:
     return rows
 
 
-def _d1_query(sql, *, account_id, database_id, api_token) -> dict:
-    url = (f"{DEFAULT_BASE_URL}/accounts/{account_id}"
+def _d1_query(sql, *, account_id, database_id, api_token,
+              base_url=None) -> dict:
+    if base_url is None:
+        base_url = cf_base_url()
+    url = (f"{base_url}/accounts/{account_id}"
            f"/d1/database/{database_id}/query")
     resp = requests.post(url, headers={"Authorization": f"Bearer {api_token}"},
                          json={"batch": [{"sql": sql}]}, timeout=120)
@@ -61,16 +65,18 @@ def _env_int(name):
         return None
 
 
-def _existing_runs(*, account_id, database_id, api_token) -> set:
+def _existing_runs(*, account_id, database_id, api_token,
+                   base_url=None) -> set:
     """All run accessions currently in ena_runs (for resume de-dup)."""
     body = _d1_query("SELECT run_accession FROM ena_runs",
                      account_id=account_id, database_id=database_id,
-                     api_token=api_token)
+                     api_token=api_token, base_url=base_url)
     return {r["run_accession"]
             for res in body.get("result", []) for r in res.get("results", [])}
 
 
-def _read_v2_watermark(*, account_id, database_id, api_token):
+def _read_v2_watermark(*, account_id, database_id, api_token,
+                       base_url=None):
     """Return the stored v2 watermark, or None if unset/unavailable.
 
     A missing sync_meta table (migration not applied) is treated as "no
@@ -80,7 +86,8 @@ def _read_v2_watermark(*, account_id, database_id, api_token):
         body = _d1_query(
             "SELECT value FROM sync_meta WHERE key = "
             f"{sql_literal(V2_WATERMARK_KEY)}",
-            account_id=account_id, database_id=database_id, api_token=api_token)
+            account_id=account_id, database_id=database_id,
+            api_token=api_token, base_url=base_url)
     except D1Error as e:
         if "no such table" in str(e):
             return None
@@ -89,23 +96,26 @@ def _read_v2_watermark(*, account_id, database_id, api_token):
     return results[0]["value"] if results else None
 
 
-def _write_v2_watermark(value, *, account_id, database_id, api_token):
+def _write_v2_watermark(value, *, account_id, database_id, api_token,
+                        base_url=None):
     stmt = ("INSERT INTO sync_meta (key, value) VALUES "
             f"({sql_literal(V2_WATERMARK_KEY)}, {sql_literal(value)}) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value")
     push_star([stmt], account_id=account_id, database_id=database_id,
-              api_token=api_token)
+              api_token=api_token, base_url=base_url)
 
 
 def cmd_pull_v2(args):
     # Incremental (watermarked) sync only applies to the real push path —
     # dry-run and SQL-file output always represent the full slice.
     out_dir = os.getenv("KSADB_D1_SQL_OUT")
+    base_url = cf_base_url()
     since = None
     if not args.dry_run and not out_dir:
         since = _read_v2_watermark(account_id=os.environ["D1_ACCOUNT_ID"],
                                    database_id=os.environ["D1_DATABASE_ID"],
-                                   api_token=os.environ["D1_API_TOKEN"])
+                                   api_token=os.environ["D1_API_TOKEN"],
+                                   base_url=base_url)
         if since:
             print(f"incremental sync since {since}")
     rows = pull_portal_slice(args.country or None, since=since)
@@ -124,7 +134,8 @@ def cmd_pull_v2(args):
     # run already in D1 has its study/sample rows already in D1 too.
     existing = _existing_runs(account_id=os.environ["D1_ACCOUNT_ID"],
                               database_id=os.environ["D1_DATABASE_ID"],
-                              api_token=os.environ["D1_API_TOKEN"])
+                              api_token=os.environ["D1_API_TOKEN"],
+                              base_url=base_url)
     all_rows = rows
     before = len(rows)
     rows = filter_new_rows(rows, existing)
@@ -147,7 +158,8 @@ def cmd_pull_v2(args):
     stmts = build_statements(entities)
     stats = push_star(stmts, account_id=os.environ["D1_ACCOUNT_ID"],
                       database_id=os.environ["D1_DATABASE_ID"],
-                      api_token=os.environ["D1_API_TOKEN"])
+                      api_token=os.environ["D1_API_TOKEN"],
+                      base_url=base_url)
     print(f"push done: {stats}")
     # Advance the watermark only after a successful push, and only to the
     # newest row actually fetched — a run with zero changed rows leaves it
@@ -159,7 +171,8 @@ def cmd_pull_v2(args):
     if updated:
         _write_v2_watermark(max(updated), account_id=os.environ["D1_ACCOUNT_ID"],
                             database_id=os.environ["D1_DATABASE_ID"],
-                            api_token=os.environ["D1_API_TOKEN"])
+                            api_token=os.environ["D1_API_TOKEN"],
+                            base_url=base_url)
 
 
 def cmd_aggregate(args):
@@ -168,6 +181,7 @@ def cmd_aggregate(args):
         database_id=os.environ["D1_DATABASE_ID"],
         api_token=os.environ["D1_API_TOKEN"],
         out_dir=args.out_dir,
+        base_url=cf_base_url(),
     )
     print(f"aggregates written: {len(paths)} files -> {args.out_dir}")
 

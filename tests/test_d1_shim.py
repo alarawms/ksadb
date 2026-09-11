@@ -16,7 +16,8 @@ import app  # noqa: E402
 
 
 @pytest.fixture()
-def shim(tmp_path):
+def shim(tmp_path, monkeypatch):
+    monkeypatch.setenv("PORT", "0")  # ephemeral port; 8000 may be occupied
     (tmp_path / "migrations").mkdir()
     src = REPO / "migrations"
     for name in ("0003_star_schema.sql", "0004_star_indexes.sql",
