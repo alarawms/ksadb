@@ -12,7 +12,7 @@ describe("parseV2Filters", () => {
     expect(clause).toContain("r.submitted_date >= ?");
     expect(clause).toContain("r.submitted_date <= ?");
     expect(clause).toContain("LIKE ?");
-    expect(params).toEqual(["Camelus", "SA", "ILLUMINA", "2024-01-01", "2024-12-31~", "%metagenome%", "%metagenome%", "%metagenome%", "%metagenome%"]);
+    expect(params).toEqual(["Camelus", "SA", "ILLUMINA", "2024-01-01", "2024-12-31~", "%metagenome%", "%metagenome%", "%metagenome%", "%metagenome%", "%metagenome%"]);
   });
 
   it("returns an empty clause with no filters", () => {
