@@ -13,3 +13,7 @@ __pycache__/
 tsconfig.tsbuildinfo
 .pytest_cache/
 .superpowers/
+
+# podman local stack
+deploy/podman/.local-sql/
+.dev.vars

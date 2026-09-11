@@ -1,0 +1,42 @@
+name: ksadb-local
+
+services:
+  d1-shim:
+    build: ./d1-shim
+    ports:
+      - "8789:8000"
+    volumes:
+      - dbdata:/data
+      - aggregates:/aggregates
+      - ../../migrations:/migrations:ro
+
+  embedder:
+    build: ./embedder
+    ports:
+      - "8790:8000"
+    volumes:
+      - vecdata:/data
+
+  sync:
+    build:
+      context: ../..
+      dockerfile: deploy/podman/sync.Dockerfile
+    environment:
+      D1_ACCOUNT_ID: local
+      D1_DATABASE_ID: local
+      D1_API_TOKEN: local
+      CF_API_TOKEN: local
+      CF_API_BASE_URL: http://d1-shim:8000
+      AI_BASE_URL: http://embedder:8000
+      VECTORIZE_BASE_URL: http://embedder:8000
+      V2_MAX_RUNS: "5000"
+    volumes:
+      - ./.local-sql:/sql
+      - aggregates:/aggregates
+    restart: "no"
+    command: ["--help"]
+
+volumes:
+  dbdata: {}
+  vecdata: {}
+  aggregates: {}
