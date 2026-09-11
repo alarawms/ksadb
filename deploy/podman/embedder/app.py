@@ -29,8 +29,11 @@ async def ai_run(model_name: str, request: Request):
     if model_name != MODEL_ID:
         raise HTTPException(404, f"unknown model {model_name}")
     body = await request.json()
-    embs = model.encode(body["text"], normalize_embeddings=True)
-    return {"data": embs.tolist()}
+    embs = model.encode(body["text"], normalize_embeddings=True).tolist()
+    # Both consumers read the same payload: sync/embed.py expects the Cloudflare
+    # REST wrapper (r.json()["result"]["data"]), while the Pages Function
+    # (functions/api/v2/semantic.ts) uses the Workers-AI binding shape (.data).
+    return {"data": embs, "result": {"data": embs}}
 
 
 @app.post("/accounts/{acct}/vectorize/v2/indexes/{index}/upsert")
