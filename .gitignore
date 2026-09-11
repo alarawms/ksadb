@@ -16,4 +16,5 @@ tsconfig.tsbuildinfo
 
 # podman local stack
 deploy/podman/.local-sql/
+deploy/podman/pages-root/out/
 .dev.vars

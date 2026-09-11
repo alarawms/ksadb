@@ -9,6 +9,7 @@ services:
       - dbdata:/data
       - aggregates:/aggregates
       - ../../migrations:/migrations:ro
+      - ../../deploy/podman/fixtures:/fixtures:ro
 
   embedder:
     build: ./embedder
