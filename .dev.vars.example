@@ -1,0 +1,4 @@
+# wrangler pages:dev picks these up (copy to .dev.vars, gitignored).
+AI_BASE_URL=http://localhost:8790
+VECTORIZE_BASE_URL=http://localhost:8790
+AGGREGATES_BASE_URL=http://localhost:8789

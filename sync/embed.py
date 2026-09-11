@@ -9,11 +9,19 @@ import os
 
 import requests
 
-from sync.d1_push import DEFAULT_BASE_URL
+from sync.d1_push import cf_base_url
 
-AI_URL = "https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/{model}"
 EMBED_MODEL = "@cf/baai/bge-small-en-v1.5"
 BATCH = 100  # texts per AI call
+
+
+def _ai_base() -> str:
+    return os.getenv("AI_BASE_URL", "https://api.cloudflare.com/client/v4")
+
+
+def _vectorize_base() -> str:
+    return os.getenv("VECTORIZE_BASE_URL",
+                    "https://api.cloudflare.com/client/v4")
 
 
 def embed_texts(texts, account_id, api_token, http=requests, model=EMBED_MODEL):
@@ -21,7 +29,7 @@ def embed_texts(texts, account_id, api_token, http=requests, model=EMBED_MODEL):
     for i in range(0, len(texts), BATCH):
         chunk = texts[i:i + BATCH]
         r = http.post(
-            AI_URL.format(acct=account_id, model=model),
+            f"{_ai_base()}/accounts/{account_id}/ai/run/{model}",
             headers={"Authorization": f"Bearer {api_token}"},
             json={"text": chunk}, timeout=120,
         )
@@ -32,7 +40,7 @@ def embed_texts(texts, account_id, api_token, http=requests, model=EMBED_MODEL):
 
 def vectorize_upsert(account_id, api_token, index, rows, http=requests):
     """rows: [{id, values, metadata}] — max 1000 per call."""
-    url = (f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
+    url = (f"{_vectorize_base()}/accounts/{account_id}"
            f"/vectorize/v2/indexes/{index}/upsert")
     for i in range(0, len(rows), 1000):
         r = http.post(url, headers={"Authorization": f"Bearer {api_token}"},
@@ -107,7 +115,7 @@ def cmd_embed():
     d1_token = os.environ["D1_API_TOKEN"]
     cf_token = os.environ["CF_API_TOKEN"]  # wrangler token: Workers AI + Vectorize
     db = os.environ["D1_DATABASE_ID"]
-    base = f"{DEFAULT_BASE_URL}/accounts/{acct}/d1/database/{db}/query"
+    base = f"{cf_base_url()}/accounts/{acct}/d1/database/{db}/query"
     h = {"Authorization": f"Bearer {d1_token}"}
     total = 0
     for spec in ENTITY_TYPES:
