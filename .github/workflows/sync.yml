@@ -51,21 +51,21 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # wrangler-action's default wrangler (3.x) lacks `r2 object put --force`
-          # (added in 4.x) — pin to the same major as local dev.
-          wranglerVersion: "4.129.0"
-          # wrangler 4.x has no `r2 object put --dir`, and wrangler-action runs
+          # Default wrangler 3.x: `r2 object put` overwrites silently in
+          # non-interactive mode (no --force needed — that's a 4.x flag, and
+          # pinning 4.x breaks npx via a workers-types peer conflict).
+          # wrangler has no `r2 object put --dir`, and wrangler-action runs
           # each line as a separate wrangler invocation (no shell), so list the
           # puts explicitly. Keys mirror the endpoint's aggregates/<name>.json.
           command: |
-            r2 object put ksadb-aggregates/aggregates/summary.json --file aggregates/summary.json --content-type application/json --force
-            r2 object put ksadb-aggregates/aggregates/by-month.json --file aggregates/by-month.json --content-type application/json --force
-            r2 object put ksadb-aggregates/aggregates/by-country.json --file aggregates/by-country.json --content-type application/json --force
-            r2 object put ksadb-aggregates/aggregates/by-region.json --file aggregates/by-region.json --content-type application/json --force
-            r2 object put ksadb-aggregates/aggregates/by-organism.json --file aggregates/by-organism.json --content-type application/json --force
-            r2 object put ksadb-aggregates/aggregates/by-submitter.json --file aggregates/by-submitter.json --content-type application/json --force
-            r2 object put ksadb-aggregates/aggregates/by-platform.json --file aggregates/by-platform.json --content-type application/json --force
-            r2 object put ksadb-aggregates/aggregates/by-strategy.json --file aggregates/by-strategy.json --content-type application/json --force
+            r2 object put ksadb-aggregates/aggregates/summary.json --file aggregates/summary.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-month.json --file aggregates/by-month.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-country.json --file aggregates/by-country.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-region.json --file aggregates/by-region.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-organism.json --file aggregates/by-organism.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-submitter.json --file aggregates/by-submitter.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-platform.json --file aggregates/by-platform.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-strategy.json --file aggregates/by-strategy.json --content-type application/json
       - name: Embed new studies into Vectorize
         run: python -m sync.cli embed
         env:
