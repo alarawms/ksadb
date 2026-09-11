@@ -34,7 +34,10 @@ function SearchInner() {
   const [filters, setFilters] = useState<Record<string, string>>(() => {
     const init = { ...DEFAULT_FILTERS };
     sp.forEach((v, k) => {
-      if (k !== "page" && v) init[k] = v;
+      if (k !== "page") {
+        if (v) init[k] = v;
+        else delete init[k]; // explicit empty param clears the Saudi default
+      }
     });
     return init;
   });
@@ -64,7 +67,7 @@ function SearchInner() {
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-14">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">Search</h1>
         <a
