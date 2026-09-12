@@ -9,6 +9,7 @@ from sync.d1_push import (D1Error, cf_base_url, push_rows, sql_literal,
 from sync.embed import cmd_embed
 from sync.fetch import pull_rows
 from sync.loader import rows_from_csv
+from sync.ontology import cmd_ontology
 from sync.portal import COUNTRIES, fetch_country
 from sync.star import row_to_entities
 from sync.star_push import build_statements, filter_new_rows, push_star, write_sql_files as write_star_sql_files
@@ -207,6 +208,7 @@ def main(argv=None):
     p_agg.add_argument("--out-dir", required=True)
     sub.add_parser("embed")
     sub.add_parser("taxonomy")
+    sub.add_parser("ontology")
     args = parser.parse_args(argv)
 
     if args.command == "seed":
@@ -221,6 +223,8 @@ def main(argv=None):
         cmd_embed()
     elif args.command == "taxonomy":
         cmd_taxonomy()
+    elif args.command == "ontology":
+        cmd_ontology()
     else:
         _deliver(pull_rows(), mode="pull")
 
