@@ -37,6 +37,7 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [zoomK, setZoomK] = useState(1);
   const draggedRef = useRef(false);
+  const simNodesRef = useRef<SimNode[]>([]);
   const simRef = useRef<ReturnType<typeof forceSimulation<SimNode>> | null>(null);
   const dragRef = useRef<ReturnType<typeof drag<SVGGElement, SimNode>> | null>(null);
   const dragBoundRef = useRef(false);
@@ -49,6 +50,7 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
 
     const simNodes: SimNode[] = data.nodes.map((n) => ({ ...n }));
     const simEdges: SimEdge[] = data.edges.map((e) => ({ ...e }));
+    simNodesRef.current = simNodes;
     const sim = forceSimulation(simNodes)
       .force("link", forceLink(simEdges).id((d) => (d as SimNode).id).distance(90))
       .force("charge", forceManyBody().strength(-260))
@@ -103,7 +105,13 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
   useEffect(() => {
     const g = gRef.current;
     if (!g || !dragRef.current || dragBoundRef.current || nodes.length === 0) return;
-    select(g).selectAll<SVGGElement, SimNode>("g.graph-node").call(dragRef.current);
+    // React-rendered <g> elements have no d3 __data__; join the simulation
+    // node objects (same references React renders, in the same order) so the
+    // drag handlers receive their datum. Index join is safe because render
+    // order equals simNodes order.
+    select(g).selectAll<SVGGElement, SimNode>("g.graph-node")
+      .data(simNodesRef.current)
+      .call(dragRef.current);
     dragBoundRef.current = true;
   }, [nodes]);
 
@@ -180,6 +188,14 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
             placeholder="Find node…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && matches.length > 0) {
+                jumpTo(matches[0] as SimNode);
+                setQuery("");
+              } else if (e.key === "Escape") {
+                setQuery("");
+              }
+            }}
             aria-label="Find node"
           />
           {matches.length > 0 && (
@@ -266,9 +282,14 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
             </g>
           </g>
         </svg>
-        {tipPos && hovered && (
+        {tipPos && hovered && (() => {
+          // svgPoint returns viewBox (800×600) units; the tooltip div is
+          // positioned in CSS px against the rendered svg (w-full h-auto, so
+          // the scale is uniform). Scale by rendered/viewBox width ratio.
+          const s = (svgRef.current?.clientWidth ?? 800) / 800;
+          return (
           <div className="pointer-events-none absolute z-10 max-w-56 rounded border px-2 py-1 text-xs shadow"
-            style={{ left: tipPos.x, top: tipPos.y, transform: "translate(-50%, -120%)",
+            style={{ left: tipPos.x * s, top: tipPos.y * s, transform: "translate(-50%, -120%)",
                      background: "var(--surface)", borderColor: "var(--border)", color: "var(--text)" }}>
             <div className="font-semibold">{hovered.label}</div>
             <div className="text-[var(--text-dim)]">
@@ -280,7 +301,8 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
               {hovered.link ? "click to open" : "click to explore"}
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );
