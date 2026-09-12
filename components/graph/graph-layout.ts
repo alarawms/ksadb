@@ -31,3 +31,33 @@ export function isDimmed(
   if (n.type !== "organism" && n.type !== "sample" && n.type !== "taxon") return false;
   return n.human_class !== filter;
 }
+
+export const ZOOM_LABEL_THRESHOLD = 1.5;
+export const ZOOM_EXTENT: [number, number] = [0.2, 8];
+
+export function neighborIds(edges: GraphEdge[], id: string): Set<string> {
+  const out = new Set<string>([id]);
+  for (const e of edges) {
+    if (e.source === id) out.add(e.target);
+    if (e.target === id) out.add(e.source);
+  }
+  return out;
+}
+
+export function visibleLabelIds(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  opts: { hoverId: string | null; zoomK: number; matchIds: Set<string> | null },
+): Set<string> {
+  if (opts.zoomK >= ZOOM_LABEL_THRESHOLD) return new Set(nodes.map((n) => n.id));
+  const ids = new Set<string>();
+  if (opts.hoverId) for (const n of neighborIds(edges, opts.hoverId)) ids.add(n);
+  if (opts.matchIds) for (const n of opts.matchIds) ids.add(n);
+  return ids;
+}
+
+export function filterNodes(nodes: GraphNode[], query: string): GraphNode[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  return nodes.filter((n) => n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q)).slice(0, 10);
+}
