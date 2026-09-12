@@ -48,7 +48,9 @@ def _d1_query(sql, *, account_id, database_id, api_token,
            f"/d1/database/{database_id}/query")
     resp = requests.post(url, headers={"Authorization": f"Bearer {api_token}"},
                          json={"batch": [{"sql": sql}]}, timeout=120)
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        raise D1Error(f"D1 HTTP {resp.status_code} for query "
+                      f"{sql[:80]!r}: {resp.text[:500]}")
     body = resp.json()
     if not body.get("success"):
         raise D1Error(f"D1 query failed: {body.get('errors')}")
