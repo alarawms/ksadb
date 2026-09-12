@@ -121,4 +121,39 @@ describe("GET /api/v2/studies/[accession]", () => {
     expect(body.error).toBe("temporarily_unavailable");
     expect(typeof body.message).toBe("string");
   });
+
+  it("scopes the runs list to Saudi samples and captures it in SQL", async () => {
+    const prepared: string[] = [];
+    const ctx = {
+      request: new Request("http://x/api/v2/studies/ERP001?sa=1"),
+      params: { accession: "ERP001" },
+      env: {
+        DB: {
+          prepare: (sql: string) => {
+            prepared.push(sql);
+            return {
+              bind: () => ({
+                first: async () => STUDY,
+                all: async () => ({ results: [RUN] }),
+              }),
+            };
+          },
+        },
+      },
+    } as never;
+    const res = await studyGet(ctx);
+    expect(res.status).toBe(200);
+    const runsSql = prepared.find((s) => s.includes("FROM ena_runs"));
+    expect(runsSql).toContain("s.country = 'SA'");
+  });
+
+  it("returns 404 when the study has no Saudi runs", async () => {
+    // A GCC-wide study that has runs but none from Saudi Arabia must not
+    // be served — the same rule as the search/records endpoints.
+    studyRow = STUDY;
+    runRows = [];
+    const res = await studyGet(stubEnv("http://x/api/v2/studies/ERP001?nosa=1"));
+    expect(res.status).toBe(404);
+    runRows = [RUN];
+  });
 });

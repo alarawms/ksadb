@@ -26,9 +26,14 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env, params })
       return json({ error: "study not found", message: `Study ${acc} not found.` }, 404);
     }
     const { results } = await env.DB.prepare(
-      `${RUN_SELECT} WHERE r.study_accession = ?
+      `${RUN_SELECT} WHERE r.study_accession = ? AND s.country = 'SA'
        ORDER BY r.submitted_date DESC, r.run_accession LIMIT 500`
     ).bind(acc).all<Record<string, unknown>>();
+    // Saudi scope is enforced on the runs query; a study whose runs are all
+    // non-Saudi (GCC-wide store) is not served at all.
+    if (!results.length) {
+      return json({ error: "study not found", message: `Study ${acc} not found.` }, 404);
+    }
     // Coerce run bytes/spots to numbers (D1 can hand back strings via some
     // bindings); keep null when absent.
     const runs = results.map((r) => ({

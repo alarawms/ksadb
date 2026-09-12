@@ -3,7 +3,9 @@ import { Env, json } from "../_lib/db";
 import { RECORD_COLUMNS } from "../_lib/columns";
 
 // Runs that only exist in the v2 star schema (ENA bootstrap) have no v1 row
-// — fall back to ena_runs so /run?id= works from /explore links too.
+// — fall back to ena_runs so /run?id= works from /explore links too. The
+// store holds the whole GCC slice, so the fallback must restrict to Saudi
+// samples; a non-Saudi run falls through to 404 like any unknown accession.
 const V2_FALLBACK_SQL = `
   SELECT r.run_accession, r.biosample_accession, r.bytes AS total_bases,
          r.spots AS total_spots, r.platform, r.instrument_model,
@@ -13,7 +15,7 @@ const V2_FALLBACK_SQL = `
   LEFT JOIN samples s ON s.biosample_accession = r.biosample_accession
   LEFT JOIN studies st ON st.accession = r.study_accession
   LEFT JOIN submitters sub ON sub.id = st.submitter_id
-  WHERE r.run_accession = ?`;
+  WHERE r.run_accession = ? AND s.country = 'SA'`;
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env, params }) => {
   const acc = String(params.accession);

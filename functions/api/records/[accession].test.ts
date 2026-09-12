@@ -48,4 +48,62 @@ describe("GET /api/records/:accession", () => {
     const res = await onRequestGet(stubEnv(null, null));
     expect(res.status).toBe(404);
   });
+
+  it("does not leak a non-Saudi run through the v2 fallback (store is GCC-wide)", async () => {
+    // The stub stands in for D1: the Qatari row exists in the store and is
+    // returned only when the query FORGETS the Saudi filter — so this test
+    // fails if the filter is ever removed from V2_FALLBACK_SQL.
+    const qaRow = {
+      run_accession: "SRR34334023", biosample_accession: "SRS25639371",
+      total_bases: 1482825, platform: "OXFORD_NANOPORE",
+      instrument_model: "GridION", library_strategy: "AMPLICON",
+      library_source: "METAGENOMIC", published_dt: "2026-01-01",
+      organism: "blood metagenome", geo_loc_name: "QA", center_name: "SUB15446045",
+    };
+    const prepare = (sql: string) => ({
+      bind: (..._params: unknown[]) => ({
+        first: async () =>
+          sql.includes("FROM runs")
+            ? null
+            : sql.includes("s.country = 'SA'")
+              ? null
+              : qaRow,
+      }),
+    });
+    const ctx = {
+      request: new Request("http://x/api/records/SRR34334023"),
+      env: { DB: { prepare } },
+      params: { accession: "SRR34334023" },
+    } as never;
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it("serves a Saudi run through the v2 fallback", async () => {
+    const saRow = {
+      run_accession: "ERR1", biosample_accession: "SAM1", total_bases: 100,
+      platform: "ILLUMINA", instrument_model: "MiSeq", library_strategy: "WGS",
+      library_source: "GENOMIC", published_dt: "2025-03-04",
+      organism: "Camelus", geo_loc_name: "SA", center_name: "KAUST",
+    };
+    const prepare = (sql: string) => ({
+      bind: (..._params: unknown[]) => ({
+        first: async () =>
+          sql.includes("FROM runs")
+            ? null
+            : sql.includes("s.country = 'SA'")
+              ? saRow
+              : null,
+      }),
+    });
+    const ctx = {
+      request: new Request("http://x/api/records/ERR1"),
+      env: { DB: { prepare } },
+      params: { accession: "ERR1" },
+    } as never;
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.run_accession).toBe("ERR1");
+  });
 });
