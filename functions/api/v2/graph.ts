@@ -28,7 +28,7 @@ function addEdge(edges: GraphEdge[], source: string, target: string, kind: strin
 function linkFor(type: NodeType, key: string, label: string): string | null | undefined {
   switch (type) {
     case "submitter": return `/institution?name=${encodeURIComponent(label)}`;
-    case "study": return `/study?accession=${encodeURIComponent(key)}`;
+    case "study": return `/study?id=${encodeURIComponent(key)}`;
     case "sample": return `/search?q=${encodeURIComponent(key)}`;
     case "organism": return `/search?organism=${encodeURIComponent(key)}`;
     case "platform": return `/search?platform=${encodeURIComponent(key)}`;

@@ -59,12 +59,16 @@ describe("GET /api/v2/graph", () => {
     const { ctx } = stubEnv("http://x/api/v2/graph?focus=study:PRJNA1249945&t=1");
     const res = await onRequestGet(ctx);
     const body = (await res.json()) as {
-      nodes: { id: string; type: string; human_class?: string }[];
+      nodes: { id: string; type: string; human_class?: string; link?: string | null }[];
     };
     const types = new Set(body.nodes.map((n) => n.type));
     expect(types.has("publication")).toBe(true);
     expect(types.has("term")).toBe(true);
     expect(body.nodes.find((n) => n.type === "organism")?.human_class).toBe("human");
+    // study links must use the param the /study page reads (?id=), and
+    // publication placeholders must not link anywhere (frontend guards clicks)
+    expect(body.nodes.find((n) => n.type === "study")?.link).toBe("/study?id=PRJNA1249945");
+    expect(body.nodes.find((n) => n.type === "publication")?.link ?? null).toBeNull();
   });
 
   it("term focus joins samples via st alias (no dangling r reference)", async () => {

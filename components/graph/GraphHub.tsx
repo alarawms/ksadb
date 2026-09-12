@@ -56,6 +56,8 @@ export default function GraphHub({ focus }: { focus: string | null }) {
   }, [focus]);
 
   const onNodeClick = (n: GraphNode) => {
+    // publication placeholder nodes carry no data and no valid focus type
+    if (n.type === "publication") return;
     if (n.link) router.push(n.link);
     else router.push(`/graph?focus=${encodeURIComponent(n.id)}`);
   };
