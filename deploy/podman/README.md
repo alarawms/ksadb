@@ -129,6 +129,17 @@ for f in ../.local-sql/*.sql; do
 done
 ```
 
+The v1 dashboard tabs (/pathogens, /genomes, /human, /api/stats/*) read the
+legacy `runs` table, which pull-v2 does not populate. Backfill it with the v1
+pipeline (same apply + mirror steps as above; stats endpoints cache for 6h,
+so restart pages:dev or delete `.wrangler/state/v3/cache` afterwards):
+
+```bash
+podman compose -f deploy/podman/compose.yml run --rm -e KSADB_D1_SQL_OUT=/sql sync pull
+curl -s "http://localhost:8789/admin/apply-sql?dir=/sql"
+# mirror into wrangler local D1 as shown above
+```
+
 ## Ontology layer (taxonomy + ENA metadata enrichment)
 
 ```bash
