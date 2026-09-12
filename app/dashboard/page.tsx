@@ -16,6 +16,8 @@ const TASKS = [
     blurb: "Build an accession basket; export curl, sra-tools or samplesheet scripts." },
   { href: "/institution", title: "Institutions",
     blurb: "Submitter leaderboard and per-institution breakdowns." },
+  { href: "/graph", title: "Knowledge graph",
+    blurb: "Click-to-explore graph of studies, samples, organisms, terms and more." },
 ];
 
 function fmtBytes(n: number): string {
