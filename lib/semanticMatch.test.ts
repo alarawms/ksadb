@@ -1,7 +1,7 @@
 // lib/semanticMatch.test.ts
 import { describe, expect, it } from "vitest";
 
-import { semanticBadge, semanticTitle, type SemanticMatch } from "./semanticMatch";
+import { matchHref, semanticBadge, semanticTitle, type SemanticMatch } from "./semanticMatch";
 
 const base = {
   accession: "SAMN00000001",
@@ -38,5 +38,17 @@ describe("semanticTitle", () => {
   it("falls back to the accession when title and label are both absent", () => {
     const m: SemanticMatch = { ...base, type: "sample", title: null, label: null };
     expect(semanticTitle(m)).toBe("SAMN00000001");
+  });
+
+  it("routes study matches to the study page", () => {
+    expect(matchHref({ ...base, type: "study", title: null })).toBe("/study?id=SAMN00000001");
+  });
+
+  it("routes run matches to the run page", () => {
+    expect(matchHref({ ...base, type: "run", title: null })).toBe("/run?id=SAMN00000001");
+  });
+
+  it("routes sample matches to a biosample search", () => {
+    expect(matchHref({ ...base, type: "sample", title: null })).toBe("/search?q=SAMN00000001");
   });
 });

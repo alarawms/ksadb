@@ -18,3 +18,12 @@ export function semanticBadge(type: SemanticMatch["type"]): string {
 export function semanticTitle(m: SemanticMatch): string {
   return m.title ?? m.label ?? m.accession;
 }
+
+/** Route each match type to the page that can actually display it. */
+export function matchHref(m: SemanticMatch): string {
+  if (m.type === "study") return `/study?id=${m.accession}`;
+  if (m.type === "run") return `/run?id=${m.accession}`;
+  // No dedicated sample page: q now matches biosample_accession, so the
+  // search page lists the sample's runs.
+  return `/search?q=${m.accession}`;
+}
