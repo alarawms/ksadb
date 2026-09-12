@@ -67,6 +67,28 @@ describe("GET /api/v2/graph", () => {
     expect(body.nodes.find((n) => n.type === "organism")?.human_class).toBe("human");
   });
 
+  it("term focus joins samples via st alias (no dangling r reference)", async () => {
+    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=term:NCBITaxon_9838&t=3");
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    const anchored = prepared.filter((s) => s.includes("FROM sample_terms st"));
+    expect(anchored.length).toBeGreaterThan(0);
+    for (const sql of anchored) {
+      // queries anchored at sample_terms must not reference ena_runs alias r
+      // unless ena_runs is itself joined in that query
+      if (sql.includes("r.biosample_accession") && !sql.includes("JOIN ena_runs r"))
+        throw new Error(`dangling r reference: ${sql}`);
+      expect(sql).toContain("s.country = 'SA'");
+    }
+  });
+
+  it("sample focus returns 200 with Saudi scope", async () => {
+    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=sample:SRS27212955&t=4");
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
+  });
+
   it("rejects a malformed focus", async () => {
     const { ctx } = stubEnv("http://x/api/v2/graph?focus=bogus&t=2");
     const res = await onRequestGet(ctx);

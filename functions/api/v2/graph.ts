@@ -12,6 +12,8 @@ interface Graph { nodes: GraphNode[]; edges: GraphEdge[] }
 const CAP = 50;
 const SA = `s.country = 'SA'`;
 const SAMPLES_RUNS = `JOIN samples s ON s.biosample_accession = r.biosample_accession`;
+// for queries anchored at sample_terms (no ena_runs alias r in scope)
+const TERMS_SAMPLES = `JOIN samples s ON s.biosample_accession = st.biosample_accession`;
 
 type Db = D1Database;
 
@@ -171,7 +173,7 @@ async function focusSample(db: Db, acc: string): Promise<Graph> {
   nodes.push(self);
 
   const { results: tissue } = await db.prepare(
-    `SELECT st.term_id FROM sample_terms st ${SAMPLES_RUNS}
+    `SELECT st.term_id FROM sample_terms st ${TERMS_SAMPLES}
      WHERE s.biosample_accession = ? AND ${SA} AND st.field = 'tissue'`
   ).bind(acc).all<{ term_id: string }>();
 
@@ -195,7 +197,7 @@ async function focusSample(db: Db, acc: string): Promise<Graph> {
 
   const { results: terms } = await db.prepare(
     `SELECT st.term_id, st.field, COUNT(*) AS n
-     FROM sample_terms st ${SAMPLES_RUNS}
+     FROM sample_terms st ${TERMS_SAMPLES}
      WHERE s.biosample_accession = ? AND ${SA} GROUP BY st.term_id, st.field LIMIT ${CAP}`
   ).bind(acc).all<{ term_id: string; field: string; n: number }>();
   for (const row of terms) {
@@ -264,7 +266,7 @@ async function focusTerm(db: Db, termId: string): Promise<Graph> {
   nodes.push(self);
   const { results: samples } = await db.prepare(
     `SELECT s.biosample_accession AS accession, COUNT(*) AS n
-     FROM sample_terms st ${SAMPLES_RUNS}
+     FROM sample_terms st ${TERMS_SAMPLES}
      WHERE st.term_id = ? AND ${SA} GROUP BY s.biosample_accession LIMIT ${CAP}`
   ).bind(termId).all<{ accession: string; n: number }>();
   for (const row of samples) {
@@ -273,7 +275,7 @@ async function focusTerm(db: Db, termId: string): Promise<Graph> {
   }
   const { results: studies } = await db.prepare(
     `SELECT r.study_accession AS accession, COUNT(*) AS runs
-     FROM sample_terms st ${SAMPLES_RUNS}
+     FROM sample_terms st ${TERMS_SAMPLES}
      JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
      WHERE st.term_id = ? AND ${SA} GROUP BY r.study_accession LIMIT ${CAP}`
   ).bind(termId).all<{ accession: string; runs: number }>();

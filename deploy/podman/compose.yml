@@ -10,6 +10,7 @@ services:
       - aggregates:/aggregates
       - ../../migrations:/migrations:ro
       - ../../deploy/podman/fixtures:/fixtures:ro
+      - ./.local-sql:/sql:ro
 
   embedder:
     build: ./embedder
