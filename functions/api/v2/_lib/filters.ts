@@ -9,10 +9,15 @@ export interface V2Where {
  * `st.*` studies); `from`/`to` bound `r.submitted_date` as strings (ENA dates
  * are `YYYY-MM-DD[ HH:MM:SS]`, lexicographic order matches chronological).
  * `to` appends `~` so `<= to~` includes everything on the `to` day.
+ *
+ * Saudi scope is mandatory: the store deliberately ingests the whole GCC
+ * slice, so `s.country = 'SA'` is always the first condition. An explicit
+ * `country` param is still ANDed — asking for another country yields an
+ * empty result rather than a leak.
  */
 export function parseV2Filters(url: URL): V2Where {
   const p = url.searchParams;
-  const conds: string[] = [];
+  const conds: string[] = ["s.country = 'SA'"];
   const params: (string | number)[] = [];
   const eq = (col: string, v: string | null) => {
     if (v) {
