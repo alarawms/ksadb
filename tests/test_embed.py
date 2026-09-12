@@ -53,6 +53,22 @@ def test_embed_texts_sends_bearer_token():
     assert http.calls[0][2] == {"Authorization": "Bearer tok"}
 
 
+def test_vectorize_upsert_wraps_vectors_key():
+    """Vectorize v2 upsert rejects a bare JSON array (40023); body must be
+    {"vectors": [...]}."""
+    from sync.embed import vectorize_upsert
+    http = FakeHttp({})
+    rows = [{"id": "PRJEB1", "values": [0.1] * 384,
+             "metadata": {"type": "study", "accession": "PRJEB1"}}]
+    vectorize_upsert("acct", "tok", "studies-vec", rows, http=http)
+    assert len(http.calls) == 1
+    url, body, headers = http.calls[0]
+    assert url.endswith("/vectorize/v2/indexes/studies-vec/upsert")
+    assert list(body.keys()) == ["vectors"]
+    assert body["vectors"] == rows
+    assert headers == {"Authorization": "Bearer tok"}
+
+
 def test_embed_texts_batches_large_inputs():
     class EchoHttp:
         def __init__(self): self.calls = []

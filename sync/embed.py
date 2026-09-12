@@ -44,7 +44,7 @@ def vectorize_upsert(account_id, api_token, index, rows, http=requests):
            f"/vectorize/v2/indexes/{index}/upsert")
     for i in range(0, len(rows), 1000):
         r = http.post(url, headers={"Authorization": f"Bearer {api_token}"},
-                      json=rows[i:i + 1000], timeout=120)
+                      json={"vectors": rows[i:i + 1000]}, timeout=120)
         r.raise_for_status()
 
 
