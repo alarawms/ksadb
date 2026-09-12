@@ -103,3 +103,12 @@ body {
     background: color-mix(in srgb, var(--text) 4%, transparent);
   }
 }
+
+.graph-flash {
+  animation: graph-flash 1.6s ease-out;
+}
+
+@keyframes graph-flash {
+  from { stroke-opacity: 0.9; }
+  to { stroke-opacity: 0; }
+}

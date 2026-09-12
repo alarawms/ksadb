@@ -17,6 +17,10 @@ const NODE_TYPES: NodeType[] = [
 ];
 const HUMAN_CLASSES: HumanClass[] = ["human", "human_associated", "other"];
 
+// Stable empty input so the canvas (and its toolbar) can render while the
+// graph data is still being fetched, without re-running the effect below.
+const EMPTY_DATA: GraphData = { nodes: [], edges: [] };
+
 export default function GraphHub({ focus }: { focus: string | null }) {
   const router = useRouter();
   const [data, setData] = useState<GraphData | null>(null);
@@ -100,7 +104,7 @@ export default function GraphHub({ focus }: { focus: string | null }) {
 
       {error && <p className="text-danger">{error}</p>}
       {loading && <p className="text-dim">Loading graph…</p>}
-      {data && !loading && <GraphCanvas data={data} filter={filter} onNodeClick={onNodeClick} />}
+      <GraphCanvas data={data ?? EMPTY_DATA} filter={filter} onNodeClick={onNodeClick} />
     </div>
   );
 }
