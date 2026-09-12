@@ -54,6 +54,7 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
       .force("collide", forceCollide(28))
       .on("tick", () => setNodes([...simNodes]));
     simRef.current = sim;
+    setEdges(simEdges);
 
     const zoom = d3zoom<SVGSVGElement, unknown>()
       .scaleExtent(ZOOM_EXTENT)
@@ -66,6 +67,9 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
 
     dragRef.current = drag<SVGGElement, SimNode>()
       .on("start", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+        // Keep the mousedown from reaching d3-zoom's svg listener, or the
+        // canvas pans while the node is being dragged.
+        ev.sourceEvent.stopPropagation();
         draggedRef.current = false;
         if (!ev.active) sim.alphaTarget(0.3).restart();
         d.fx = d.x; d.fy = d.y;
@@ -100,8 +104,12 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
     dragBoundRef.current = true;
   }, [nodes]);
 
-  const neighbors = hoverId ? neighborIds(edges as GraphEdge[], hoverId) : null;
-  const labels = visibleLabelIds(nodes, edges as GraphEdge[], { hoverId, zoomK, matchIds: null });
+  // Hover neighborhoods must be computed from data.edges (original string
+  // endpoints): the link force mutates the simulation's edge objects in place,
+  // replacing source/target strings with node references, which would break
+  // neighborIds' string comparison. The state's edges are render-only.
+  const neighbors = hoverId ? neighborIds(data.edges, hoverId) : null;
+  const labels = visibleLabelIds(nodes, data.edges, { hoverId, zoomK, matchIds: null });
 
   const handleClick = (n: GraphNode) => {
     if (draggedRef.current) return;
