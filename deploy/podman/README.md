@@ -129,6 +129,24 @@ for f in ../.local-sql/*.sql; do
 done
 ```
 
+## Ontology layer (taxonomy + ENA metadata enrichment)
+
+```bash
+# NCBI taxonomy rollup for the taxa present in samples (needs network once,
+# downloads ~50 MB taxdump; rebuild the sync image first if 'taxonomy' is an
+# unknown command: podman compose -f deploy/podman/compose.yml build sync)
+podman compose -f deploy/podman/compose.yml run --rm -e KSADB_D1_SQL_OUT=/sql sync taxonomy
+curl -s "http://localhost:8789/admin/apply-sql?dir=/sql"
+
+# ENA metadata -> ontology terms via EBI OLS4 (value-driven, resumable)
+podman compose -f deploy/podman/compose.yml run --rm -e KSADB_D1_SQL_OUT=/sql sync ontology
+curl -s "http://localhost:8789/admin/apply-sql?dir=/sql"
+# mirror both into the pages-dev wrangler D1 (see Full local pull above)
+```
+
+Requires migration `0008_taxonomy.sql` applied to both stores (shim re-applies
+it on boot; mirror into wrangler as shown in Smoke loop).
+
 ## Ports
 
 | Host port | Service   | Purpose                                        |
