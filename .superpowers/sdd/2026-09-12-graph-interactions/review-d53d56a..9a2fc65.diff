@@ -1,0 +1,625 @@
+# Review package: d53d56a4875b7f484af4bdb87de1954795e19cdb..HEAD
+
+## Commits
+9a2fc65 feat(graph): zoom, pan, node drag, and hover neighbor highlight
+
+## Files changed
+ components/graph/GraphCanvas.tsx | 163 +++++++++++++++++++++++++++++++++++++++
+ components/graph/GraphHub.tsx    | 115 +--------------------------
+ package-lock.json                |  90 +++++++++++++++++++++
+ package.json                     |   5 ++
+ 4 files changed, 262 insertions(+), 111 deletions(-)
+
+## Diff
+diff --git a/components/graph/GraphCanvas.tsx b/components/graph/GraphCanvas.tsx
+new file mode 100644
+index 0000000..36b35b2
+--- /dev/null
++++ b/components/graph/GraphCanvas.tsx
+@@ -0,0 +1,163 @@
++"use client";
++
++import { useEffect, useRef, useState } from "react";
++import { drag, type D3DragEvent } from "d3-drag";
++import { select } from "d3-selection";
++import { zoom as d3zoom, type D3ZoomEvent, type ZoomBehavior } from "d3-zoom";
++import {
++  forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation,
++  type SimulationNodeDatum,
++} from "d3-force";
++
++import {
++  HUMAN_COLORS, isDimmed, neighborIds, NODE_COLORS, visibleLabelIds, ZOOM_EXTENT,
++  type GraphData, type GraphEdge, type GraphNode, type HumanClass,
++} from "./graph-layout";
++
++type Filter = "all" | HumanClass;
++type SimNode = GraphNode & SimulationNodeDatum;
++type SimEdge = Omit<GraphEdge, "source" | "target"> & { source: string | SimNode; target: string | SimNode };
++
++function nodeColor(n: GraphNode): string {
++  if (n.type === "organism" && n.human_class) return HUMAN_COLORS[n.human_class];
++  return NODE_COLORS[n.type];
++}
++
++export default function GraphCanvas({ data, filter, onNodeClick }: {
++  data: GraphData;
++  filter: Filter;
++  onNodeClick: (n: GraphNode) => void;
++}) {
++  const svgRef = useRef<SVGSVGElement>(null);
++  const gRef = useRef<SVGGElement>(null);
++  const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
++  const [nodes, setNodes] = useState<SimNode[]>([]);
++  const [edges, setEdges] = useState<SimEdge[]>([]);
++  const [hoverId, setHoverId] = useState<string | null>(null);
++  const [zoomK, setZoomK] = useState(1);
++  const draggedRef = useRef(false);
++  const simRef = useRef<ReturnType<typeof forceSimulation<SimNode>> | null>(null);
++  const dragRef = useRef<ReturnType<typeof drag<SVGGElement, SimNode>> | null>(null);
++  const dragBoundRef = useRef(false);
++
++  useEffect(() => {
++    const svg = svgRef.current;
++    const g = gRef.current;
++    if (!svg || !g) return;
++
++    const simNodes: SimNode[] = data.nodes.map((n) => ({ ...n }));
++    const simEdges: SimEdge[] = data.edges.map((e) => ({ ...e }));
++    const sim = forceSimulation(simNodes)
++      .force("link", forceLink(simEdges).id((d) => (d as SimNode).id).distance(90))
++      .force("charge", forceManyBody().strength(-260))
++      .force("center", forceCenter(400, 300))
++      .force("collide", forceCollide(28))
++      .on("tick", () => setNodes([...simNodes]));
++    simRef.current = sim;
++
++    const zoom = d3zoom<SVGSVGElement, unknown>()
++      .scaleExtent(ZOOM_EXTENT)
++      .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
++        g.setAttribute("transform", ev.transform.toString());
++        setZoomK(ev.transform.k);
++      });
++    zoomRef.current = zoom;
++    const svgSel = select(svg).call(zoom);
++
++    dragRef.current = drag<SVGGElement, SimNode>()
++      .on("start", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
++        draggedRef.current = false;
++        if (!ev.active) sim.alphaTarget(0.3).restart();
++        d.fx = d.x; d.fy = d.y;
++      })
++      .on("drag", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
++        draggedRef.current = true;
++        d.fx = ev.x; d.fy = ev.y;
++      })
++      .on("end", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
++        if (!ev.active) sim.alphaTarget(0);
++        d.fx = null; d.fy = null;
++        setTimeout(() => { draggedRef.current = false; }, 0);
++      });
++
++    return () => {
++      sim.stop();
++      simRef.current = null;
++      dragRef.current = null;
++      dragBoundRef.current = false;
++      svgSel.on(".zoom", null);
++      zoomRef.current = null;
++    };
++  }, [data]);
++
++  // Nodes only enter the DOM after the simulation's first tick, so drag must
++  // be bound once they exist (d3-drag attaches listeners to the selection's
++  // elements directly; selecting here at mount time would match nothing).
++  useEffect(() => {
++    const g = gRef.current;
++    if (!g || !dragRef.current || dragBoundRef.current || nodes.length === 0) return;
++    select(g).selectAll<SVGGElement, SimNode>("g.graph-node").call(dragRef.current);
++    dragBoundRef.current = true;
++  }, [nodes]);
++
++  const neighbors = hoverId ? neighborIds(edges as GraphEdge[], hoverId) : null;
++  const labels = visibleLabelIds(nodes, edges as GraphEdge[], { hoverId, zoomK, matchIds: null });
++
++  const handleClick = (n: GraphNode) => {
++    if (draggedRef.current) return;
++    onNodeClick(n);
++  };
++
++  const coord = (p: string | SimNode): { x: number; y: number } =>
++    typeof p === "object" ? { x: p.x ?? 0, y: p.y ?? 0 } : { x: 0, y: 0 };
++
++  return (
++    <div className="card overflow-hidden p-0">
++      <svg ref={svgRef} viewBox="0 0 800 600" className="block h-auto w-full"
++        style={{ background: "var(--surface)", touchAction: "none" }} role="img">
++        <g ref={gRef}>
++          <g>
++            {edges.map((e, i) => {
++              const s = coord(e.source);
++              const t = coord(e.target);
++              const dimmed = neighbors !== null &&
++                !(neighbors.has(String(typeof e.source === "object" ? e.source.id : e.source)) &&
++                  neighbors.has(String(typeof e.target === "object" ? e.target.id : e.target)));
++              return (
++                <line key={i} x1={s.x} y1={s.y} x2={t.x} y2={t.y}
++                  stroke="var(--border)" strokeOpacity={dimmed ? 0.08 : 0.6} />
++              );
++            })}
++          </g>
++          <g>
++            {nodes.map((n) => {
++              const dimFilter = isDimmed(n, filter);
++              const dimHover = neighbors !== null && !neighbors.has(n.id);
++              const dimmed = dimFilter || dimHover;
++              return (
++                <g key={n.id} className="graph-node"
++                  transform={`translate(${n.x ?? 0},${n.y ?? 0})`}
++                  opacity={dimmed ? 0.15 : 1}
++                  style={{ cursor: "pointer" }}
++                  onClick={() => handleClick(n)}
++                  onMouseEnter={() => setHoverId(n.id)}
++                  onMouseLeave={() => setHoverId((h) => (h === n.id ? null : h))}>
++                  <circle r={6 + Math.min(14, Math.log2(n.count ?? 1))}
++                    fill={nodeColor(n)} fillOpacity={0.9} stroke="var(--surface)" />
++                  {labels.has(n.id) && (
++                    <text dy={-10 - Math.min(14, Math.log2(n.count ?? 1))}
++                      textAnchor="middle" fontSize={10} fill="var(--text)"
++                      style={{ pointerEvents: "none" }}>
++                      {n.label}
++                    </text>
++                  )}
++                  <title>{`${n.label}${n.count != null ? ` (${n.count.toLocaleString()})` : ""}`}</title>
++                </g>
++              );
++            })}
++          </g>
++        </g>
++      </svg>
++    </div>
++  );
++}
+diff --git a/components/graph/GraphHub.tsx b/components/graph/GraphHub.tsx
+index 9f138bc..881642b 100644
+--- a/components/graph/GraphHub.tsx
++++ b/components/graph/GraphHub.tsx
+@@ -1,43 +1,29 @@
+ "use client";
+ 
+ import { useRouter } from "next/navigation";
+-import { useEffect, useRef, useState } from "react";
+-import {
+-  forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation,
+-  type SimulationNodeDatum,
+-} from "d3-force";
++import { useEffect, useState } from "react";
+ 
+ import {
+-  HUMAN_COLORS, isDimmed, NODE_COLORS,
+-  type GraphData, type GraphEdge, type GraphNode, type HumanClass, type NodeType,
++  HUMAN_COLORS, NODE_COLORS,
++  type GraphData, type GraphNode, type HumanClass, type NodeType,
+ } from "./graph-layout";
++import GraphCanvas from "./GraphCanvas";
+ 
+ type Filter = "all" | HumanClass;
+ 
+-type SimNode = GraphNode & SimulationNodeDatum;
+-type SimEdge = Omit<GraphEdge, "source" | "target"> & {
+-  source: string | SimNode;
+-  target: string | SimNode;
+-};
+-
+ const NODE_TYPES: NodeType[] = [
+   "submitter", "study", "sample", "organism", "taxon",
+   "platform", "strategy", "region", "publication", "term",
+ ];
+ const HUMAN_CLASSES: HumanClass[] = ["human", "human_associated", "other"];
+ 
+-function nodeColor(n: GraphNode): string {
+-  if (n.type === "organism" && n.human_class) return HUMAN_COLORS[n.human_class];
+-  return NODE_COLORS[n.type];
+-}
+-
+ export default function GraphHub({ focus }: { focus: string | null }) {
+   const router = useRouter();
+   const [data, setData] = useState<GraphData | null>(null);
+   const [loading, setLoading] = useState(true);
+   const [error, setError] = useState<string | null>(null);
+   const [filter, setFilter] = useState<Filter>("all");
+ 
+   useEffect(() => {
+     let cancelled = false;
+     setLoading(true);
+@@ -111,103 +97,10 @@ export default function GraphHub({ focus }: { focus: string | null }) {
+           </button>
+         ))}
+       </div>
+ 
+       {error && <p className="text-danger">{error}</p>}
+       {loading && <p className="text-dim">Loading graph…</p>}
+       {data && !loading && <GraphCanvas data={data} filter={filter} onNodeClick={onNodeClick} />}
+     </div>
+   );
+ }
+-
+-function GraphCanvas({
+-  data, filter, onNodeClick,
+-}: {
+-  data: GraphData;
+-  filter: Filter;
+-  onNodeClick: (n: GraphNode) => void;
+-}) {
+-  const svgRef = useRef<SVGSVGElement>(null);
+-  const [nodes, setNodes] = useState<SimNode[]>([]);
+-  const [edges, setEdges] = useState<SimEdge[]>([]);
+-
+-  useEffect(() => {
+-    const simNodes: SimNode[] = data.nodes.map((n) => ({ ...n }));
+-    const simEdges: SimEdge[] = data.edges.map((e) => ({ ...e }));
+-    const sim = forceSimulation(simNodes)
+-      .force("link", forceLink(simEdges).id((d) => (d as SimNode).id).distance(90))
+-      .force("charge", forceManyBody().strength(-260))
+-      .force("center", forceCenter(400, 300))
+-      .force("collide", forceCollide(28))
+-      .on("tick", () => {
+-        setNodes([...simNodes]);
+-        setEdges([...simEdges]);
+-      });
+-    return () => {
+-      sim.stop();
+-    };
+-  }, [data]);
+-
+-  const coord = (p: string | SimNode): { x: number; y: number } =>
+-    typeof p === "object" ? { x: p.x ?? 0, y: p.y ?? 0 } : { x: 0, y: 0 };
+-
+-  return (
+-    <div className="card overflow-hidden p-0">
+-      <svg
+-        ref={svgRef}
+-        viewBox="0 0 800 600"
+-        className="block h-auto w-full"
+-        style={{ background: "var(--surface)" }}
+-        role="img"
+-      >
+-        <g>
+-          {edges.map((e, i) => {
+-            const s = coord(e.source);
+-            const t = coord(e.target);
+-            return (
+-              <line
+-                key={i}
+-                x1={s.x}
+-                y1={s.y}
+-                x2={t.x}
+-                y2={t.y}
+-                stroke="var(--border)"
+-                strokeOpacity={0.6}
+-              />
+-            );
+-          })}
+-        </g>
+-        <g>
+-          {nodes.map((n) => {
+-            const dimmed = isDimmed(n, filter);
+-            return (
+-              <g
+-                key={n.id}
+-                transform={`translate(${n.x ?? 0}, ${n.y ?? 0})`}
+-                opacity={dimmed ? 0.15 : 1}
+-                style={{ cursor: "pointer" }}
+-                onClick={() => onNodeClick(n)}
+-              >
+-                <circle
+-                  r={6 + Math.min(14, Math.log2(n.count ?? 1))}
+-                  fill={nodeColor(n)}
+-                  fillOpacity={0.9}
+-                  stroke="var(--surface)"
+-                />
+-                <text
+-                  dy={-10 - Math.min(14, Math.log2(n.count ?? 1))}
+-                  textAnchor="middle"
+-                  fontSize={10}
+-                  fill="var(--text)"
+-                  style={{ pointerEvents: "none" }}
+-                >
+-                  {n.label}
+-                </text>
+-                <title>{`${n.label}${n.count != null ? ` (${n.count.toLocaleString()})` : ""}`}</title>
+-              </g>
+-            );
+-          })}
+-        </g>
+-      </svg>
+-    </div>
+-  );
+-}
+diff --git a/package-lock.json b/package-lock.json
+index ec4ee2c..80c8b85 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,27 +1,32 @@
+ {
+   "name": "ksadb-web",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "ksadb-web",
+       "dependencies": {
++        "d3-drag": "^3.0.0",
+         "d3-force": "^3.0.0",
++        "d3-zoom": "^3.0.0",
+         "next": "14.2.5",
+         "react": "18.3.1",
+         "react-dom": "18.3.1",
+         "recharts": "2.12.7"
+       },
+       "devDependencies": {
+         "@cloudflare/workers-types": "^4.20260702.1",
++        "@types/d3-drag": "^3.0.7",
+         "@types/d3-force": "^3.0.10",
++        "@types/d3-selection": "^3.0.11",
++        "@types/d3-zoom": "^3.0.8",
+         "@types/node": "20.14.10",
+         "@types/react": "18.3.3",
+         "@types/react-dom": "18.3.0",
+         "autoprefixer": "10.4.19",
+         "postcss": "8.4.39",
+         "tailwindcss": "3.4.6",
+         "typescript": "5.5.4",
+         "vitest": "^2.1.9",
+         "wrangler": "^4.129.0"
+       }
+@@ -1834,20 +1839,30 @@
+       "resolved": "https://registry.npmjs.org/@types/d3-array/-/d3-array-3.2.2.tgz",
+       "integrity": "sha512-hOLWVbm7uRza0BYXpIIW5pxfrKe0W+D5lrFiAEYR+pb6w3N2SwSMaJbXdUfSEv+dT4MfHBLtn5js0LAWaO6otw==",
+       "license": "MIT"
+     },
+     "node_modules/@types/d3-color": {
+       "version": "3.1.3",
+       "resolved": "https://registry.npmjs.org/@types/d3-color/-/d3-color-3.1.3.tgz",
+       "integrity": "sha512-iO90scth9WAbmgv7ogoq57O9YpKmFBbmoEoCHDB2xMBY0+/KVrqAaCDyCE16dUspeOvIxFFRI+0sEtqDqy2b4A==",
+       "license": "MIT"
+     },
++    "node_modules/@types/d3-drag": {
++      "version": "3.0.7",
++      "resolved": "https://registry.npmjs.org/@types/d3-drag/-/d3-drag-3.0.7.tgz",
++      "integrity": "sha512-HE3jVKlzU9AaMazNufooRJ5ZpWmLIoc90A37WU2JMmeq28w1FQqCZswHZ3xR+SuxYftzHq6WU6KJHvqxKzTxxQ==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@types/d3-selection": "*"
++      }
++    },
+     "node_modules/@types/d3-ease": {
+       "version": "3.0.2",
+       "resolved": "https://registry.npmjs.org/@types/d3-ease/-/d3-ease-3.0.2.tgz",
+       "integrity": "sha512-NcV1JjO5oDzoK26oMzbILE6HW7uVXOHLQvHshBUW4UMdZGfiY6v5BeQwh9a9tCzv+CeefZQHJt5SRgK154RtiA==",
+       "license": "MIT"
+     },
+     "node_modules/@types/d3-force": {
+       "version": "3.0.10",
+       "resolved": "https://registry.npmjs.org/@types/d3-force/-/d3-force-3.0.10.tgz",
+       "integrity": "sha512-ZYeSaCF3p73RdOKcjj+swRlZfnYpK1EbaDiYICEEp5Q6sUiqFaFQ9qgoshp5CzIyyb/yD09kD9o2zEltCexlgw==",
+@@ -1871,20 +1886,27 @@
+     },
+     "node_modules/@types/d3-scale": {
+       "version": "4.0.9",
+       "resolved": "https://registry.npmjs.org/@types/d3-scale/-/d3-scale-4.0.9.tgz",
+       "integrity": "sha512-dLmtwB8zkAeO/juAMfnV+sItKjlsw2lKdZVVy6LRr0cBmegxSABiLEpGVmSJJ8O08i4+sGR6qQtb6WtuwJdvVw==",
+       "license": "MIT",
+       "dependencies": {
+         "@types/d3-time": "*"
+       }
+     },
++    "node_modules/@types/d3-selection": {
++      "version": "3.0.11",
++      "resolved": "https://registry.npmjs.org/@types/d3-selection/-/d3-selection-3.0.11.tgz",
++      "integrity": "sha512-bhAXu23DJWsrI45xafYpkQ4NtcKMwWnAC/vKrd2l+nxMFuvOT3XMYTIj2opv8vq8AO5Yh7Qac/nSeP/3zjTK0w==",
++      "dev": true,
++      "license": "MIT"
++    },
+     "node_modules/@types/d3-shape": {
+       "version": "3.2.0",
+       "resolved": "https://registry.npmjs.org/@types/d3-shape/-/d3-shape-3.2.0.tgz",
+       "integrity": "sha512-kVd74ta9eof3eJOvbNd1vGKS/XERRyQbT26Og63hIsvDO84cjD5gEOhsXf26w3FSoNlPVz84DOFcKv/oou+fMw==",
+       "license": "MIT",
+       "dependencies": {
+         "@types/d3-path": "*"
+       }
+     },
+     "node_modules/@types/d3-time": {
+@@ -1892,20 +1914,31 @@
+       "resolved": "https://registry.npmjs.org/@types/d3-time/-/d3-time-3.0.4.tgz",
+       "integrity": "sha512-yuzZug1nkAAaBlBBikKZTgzCeA+k1uy4ZFwWANOfKw5z5LRhV0gNA7gNkKm7HoK+HRN0wX3EkxGk0fpbWhmB7g==",
+       "license": "MIT"
+     },
+     "node_modules/@types/d3-timer": {
+       "version": "3.0.2",
+       "resolved": "https://registry.npmjs.org/@types/d3-timer/-/d3-timer-3.0.2.tgz",
+       "integrity": "sha512-Ps3T8E8dZDam6fUyNiMkekK3XUsaUEik+idO9/YjPtfj2qruF8tFBXS7XhtE4iIXBLxhmLjP3SXpLhVf21I9Lw==",
+       "license": "MIT"
+     },
++    "node_modules/@types/d3-zoom": {
++      "version": "3.0.8",
++      "resolved": "https://registry.npmjs.org/@types/d3-zoom/-/d3-zoom-3.0.8.tgz",
++      "integrity": "sha512-iqMC4/YlFCSlO8+2Ii1GGGliCAY4XdeG748w5vQUbevlbDu0zSjH/+jojorQVBK/se0j6DUFNPBGSqD3YWYnDw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@types/d3-interpolate": "*",
++        "@types/d3-selection": "*"
++      }
++    },
+     "node_modules/@types/estree": {
+       "version": "1.0.9",
+       "resolved": "https://registry.npmjs.org/@types/estree/-/estree-1.0.9.tgz",
+       "integrity": "sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==",
+       "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/@types/node": {
+       "version": "20.14.10",
+       "resolved": "https://registry.npmjs.org/@types/node/-/node-20.14.10.tgz",
+@@ -2410,20 +2443,33 @@
+     },
+     "node_modules/d3-dispatch": {
+       "version": "3.0.1",
+       "resolved": "https://registry.npmjs.org/d3-dispatch/-/d3-dispatch-3.0.1.tgz",
+       "integrity": "sha512-rzUyPU/S7rwUflMyLc1ETDeBj0NRuHKKAcvukozwhshr6g6c5d8zh4c2gQjY2bZ0dXeGLWc1PF174P2tVvKhfg==",
+       "license": "ISC",
+       "engines": {
+         "node": ">=12"
+       }
+     },
++    "node_modules/d3-drag": {
++      "version": "3.0.0",
++      "resolved": "https://registry.npmjs.org/d3-drag/-/d3-drag-3.0.0.tgz",
++      "integrity": "sha512-pWbUJLdETVA8lQNJecMxoXfH6x+mO2UQo8rSmZ+QqxcbyA3hfeprFgIT//HW2nlHChWeIIMwS2Fq+gEARkhTkg==",
++      "license": "ISC",
++      "dependencies": {
++        "d3-dispatch": "1 - 3",
++        "d3-selection": "3"
++      },
++      "engines": {
++        "node": ">=12"
++      }
++    },
+     "node_modules/d3-ease": {
+       "version": "3.0.1",
+       "resolved": "https://registry.npmjs.org/d3-ease/-/d3-ease-3.0.1.tgz",
+       "integrity": "sha512-wR/XK3D3XcLIZwpbvQwQ5fK+8Ykds1ip7A2Txe0yxncXSdq1L9skcG7blcedkOX+ZcgxGAmLX1FrRGbADwzi0w==",
+       "license": "BSD-3-Clause",
+       "engines": {
+         "node": ">=12"
+       }
+     },
+     "node_modules/d3-force": {
+@@ -2488,20 +2534,29 @@
+         "d3-array": "2.10.0 - 3",
+         "d3-format": "1 - 3",
+         "d3-interpolate": "1.2.0 - 3",
+         "d3-time": "2.1.1 - 3",
+         "d3-time-format": "2 - 4"
+       },
+       "engines": {
+         "node": ">=12"
+       }
+     },
++    "node_modules/d3-selection": {
++      "version": "3.0.0",
++      "resolved": "https://registry.npmjs.org/d3-selection/-/d3-selection-3.0.0.tgz",
++      "integrity": "sha512-fmTRWbNMmsmWq6xJV8D19U/gw/bwrHfNXxrIN+HfZgnzqTHp9jOmKMhsTUjXOJnZOdZY9Q28y4yebKzqDKlxlQ==",
++      "license": "ISC",
++      "engines": {
++        "node": ">=12"
++      }
++    },
+     "node_modules/d3-shape": {
+       "version": "3.2.0",
+       "resolved": "https://registry.npmjs.org/d3-shape/-/d3-shape-3.2.0.tgz",
+       "integrity": "sha512-SaLBuwGm3MOViRq2ABk3eLoxwZELpH6zhl3FbAoJ7Vm1gofKx6El1Ib5z23NUEhF9AsGl7y+dzLe5Cw2AArGTA==",
+       "license": "ISC",
+       "dependencies": {
+         "d3-path": "^3.1.0"
+       },
+       "engines": {
+         "node": ">=12"
+@@ -2533,20 +2588,55 @@
+     },
+     "node_modules/d3-timer": {
+       "version": "3.0.1",
+       "resolved": "https://registry.npmjs.org/d3-timer/-/d3-timer-3.0.1.tgz",
+       "integrity": "sha512-ndfJ/JxxMd3nw31uyKoY2naivF+r29V+Lc0svZxe1JvvIRmi8hUsrMvdOwgS1o6uBHmiz91geQ0ylPP0aj1VUA==",
+       "license": "ISC",
+       "engines": {
+         "node": ">=12"
+       }
+     },
++    "node_modules/d3-transition": {
++      "version": "3.0.1",
++      "resolved": "https://registry.npmjs.org/d3-transition/-/d3-transition-3.0.1.tgz",
++      "integrity": "sha512-ApKvfjsSR6tg06xrL434C0WydLr7JewBB3V+/39RMHsaXTOG0zmt/OAXeng5M5LBm0ojmxJrpomQVZ1aPvBL4w==",
++      "license": "ISC",
++      "dependencies": {
++        "d3-color": "1 - 3",
++        "d3-dispatch": "1 - 3",
++        "d3-ease": "1 - 3",
++        "d3-interpolate": "1 - 3",
++        "d3-timer": "1 - 3"
++      },
++      "engines": {
++        "node": ">=12"
++      },
++      "peerDependencies": {
++        "d3-selection": "2 - 3"
++      }
++    },
++    "node_modules/d3-zoom": {
++      "version": "3.0.0",
++      "resolved": "https://registry.npmjs.org/d3-zoom/-/d3-zoom-3.0.0.tgz",
++      "integrity": "sha512-b8AmV3kfQaqWAuacbPuNbL6vahnOJflOhexLzMMNLga62+/nh0JzvJ0aO/5a5MVgUFGS7Hu1P9P03o3fJkDCyw==",
++      "license": "ISC",
++      "dependencies": {
++        "d3-dispatch": "1 - 3",
++        "d3-drag": "2 - 3",
++        "d3-interpolate": "1 - 3",
++        "d3-selection": "2 - 3",
++        "d3-transition": "2 - 3"
++      },
++      "engines": {
++        "node": ">=12"
++      }
++    },
+     "node_modules/debug": {
+       "version": "4.4.3",
+       "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz",
+       "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
+       "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "ms": "^2.1.3"
+       },
+       "engines": {
+diff --git a/package.json b/package.json
+index 2e822fa..a8ae37e 100644
+--- a/package.json
++++ b/package.json
+@@ -2,29 +2,34 @@
+   "name": "ksadb-web",
+   "private": true,
+   "scripts": {
+     "dev": "next dev",
+     "build": "next build",
+     "pages:dev": "wrangler pages dev .next/out",
+     "test": "vitest run",
+     "typecheck": "tsc --noEmit"
+   },
+   "dependencies": {
++    "d3-drag": "^3.0.0",
+     "d3-force": "^3.0.0",
++    "d3-zoom": "^3.0.0",
+     "next": "14.2.5",
+     "react": "18.3.1",
+     "react-dom": "18.3.1",
+     "recharts": "2.12.7"
+   },
+   "devDependencies": {
+     "@cloudflare/workers-types": "^4.20260702.1",
++    "@types/d3-drag": "^3.0.7",
+     "@types/d3-force": "^3.0.10",
++    "@types/d3-selection": "^3.0.11",
++    "@types/d3-zoom": "^3.0.8",
+     "@types/node": "20.14.10",
+     "@types/react": "18.3.3",
+     "@types/react-dom": "18.3.0",
+     "autoprefixer": "10.4.19",
+     "postcss": "8.4.39",
+     "tailwindcss": "3.4.6",
+     "typescript": "5.5.4",
+     "vitest": "^2.1.9",
+     "wrangler": "^4.129.0"
+   }

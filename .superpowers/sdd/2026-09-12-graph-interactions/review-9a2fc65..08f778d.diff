@@ -1,0 +1,80 @@
+# Review package: 9a2fc65..HEAD
+
+## Commits
+08f778d fix(graph): populate edges state, compute hover neighborhoods from data.edges, stop drag pan-propagation
+
+## Files changed
+ components/graph/GraphCanvas.tsx | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/components/graph/GraphCanvas.tsx b/components/graph/GraphCanvas.tsx
+index 36b35b2..8980484 100644
+--- a/components/graph/GraphCanvas.tsx
++++ b/components/graph/GraphCanvas.tsx
+@@ -47,32 +47,36 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+ 
+     const simNodes: SimNode[] = data.nodes.map((n) => ({ ...n }));
+     const simEdges: SimEdge[] = data.edges.map((e) => ({ ...e }));
+     const sim = forceSimulation(simNodes)
+       .force("link", forceLink(simEdges).id((d) => (d as SimNode).id).distance(90))
+       .force("charge", forceManyBody().strength(-260))
+       .force("center", forceCenter(400, 300))
+       .force("collide", forceCollide(28))
+       .on("tick", () => setNodes([...simNodes]));
+     simRef.current = sim;
++    setEdges(simEdges);
+ 
+     const zoom = d3zoom<SVGSVGElement, unknown>()
+       .scaleExtent(ZOOM_EXTENT)
+       .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
+         g.setAttribute("transform", ev.transform.toString());
+         setZoomK(ev.transform.k);
+       });
+     zoomRef.current = zoom;
+     const svgSel = select(svg).call(zoom);
+ 
+     dragRef.current = drag<SVGGElement, SimNode>()
+       .on("start", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
++        // Keep the mousedown from reaching d3-zoom's svg listener, or the
++        // canvas pans while the node is being dragged.
++        ev.sourceEvent.stopPropagation();
+         draggedRef.current = false;
+         if (!ev.active) sim.alphaTarget(0.3).restart();
+         d.fx = d.x; d.fy = d.y;
+       })
+       .on("drag", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+         draggedRef.current = true;
+         d.fx = ev.x; d.fy = ev.y;
+       })
+       .on("end", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+         if (!ev.active) sim.alphaTarget(0);
+@@ -93,22 +97,26 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+   // Nodes only enter the DOM after the simulation's first tick, so drag must
+   // be bound once they exist (d3-drag attaches listeners to the selection's
+   // elements directly; selecting here at mount time would match nothing).
+   useEffect(() => {
+     const g = gRef.current;
+     if (!g || !dragRef.current || dragBoundRef.current || nodes.length === 0) return;
+     select(g).selectAll<SVGGElement, SimNode>("g.graph-node").call(dragRef.current);
+     dragBoundRef.current = true;
+   }, [nodes]);
+ 
+-  const neighbors = hoverId ? neighborIds(edges as GraphEdge[], hoverId) : null;
+-  const labels = visibleLabelIds(nodes, edges as GraphEdge[], { hoverId, zoomK, matchIds: null });
++  // Hover neighborhoods must be computed from data.edges (original string
++  // endpoints): the link force mutates the simulation's edge objects in place,
++  // replacing source/target strings with node references, which would break
++  // neighborIds' string comparison. The state's edges are render-only.
++  const neighbors = hoverId ? neighborIds(data.edges, hoverId) : null;
++  const labels = visibleLabelIds(nodes, data.edges, { hoverId, zoomK, matchIds: null });
+ 
+   const handleClick = (n: GraphNode) => {
+     if (draggedRef.current) return;
+     onNodeClick(n);
+   };
+ 
+   const coord = (p: string | SimNode): { x: number; y: number } =>
+     typeof p === "object" ? { x: p.x ?? 0, y: p.y ?? 0 } : { x: 0, y: 0 };
+ 
+   return (
