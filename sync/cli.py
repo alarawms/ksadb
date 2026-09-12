@@ -12,6 +12,7 @@ from sync.loader import rows_from_csv
 from sync.portal import COUNTRIES, fetch_country
 from sync.star import row_to_entities
 from sync.star_push import build_statements, filter_new_rows, push_star, write_sql_files as write_star_sql_files
+from sync.taxonomy import cmd_taxonomy
 
 V2_WATERMARK_KEY = "v2_last_sync"
 
@@ -205,6 +206,7 @@ def main(argv=None):
     p_agg = sub.add_parser("aggregate")
     p_agg.add_argument("--out-dir", required=True)
     sub.add_parser("embed")
+    sub.add_parser("taxonomy")
     args = parser.parse_args(argv)
 
     if args.command == "seed":
@@ -217,6 +219,8 @@ def main(argv=None):
         cmd_aggregate(args)
     elif args.command == "embed":
         cmd_embed()
+    elif args.command == "taxonomy":
+        cmd_taxonomy()
     else:
         _deliver(pull_rows(), mode="pull")
 
