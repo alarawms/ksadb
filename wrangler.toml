@@ -7,3 +7,14 @@ binding = "DB"
 database_name = "ksadb-db"
 database_id = "2cb05812-7c51-4078-ba20-9d0ca90cc7e6"
 migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "AGGREGATES"
+bucket_name = "ksadb-aggregates"
+
+[[vectorize]]
+binding = "STUDIES_INDEX"
+index_name = "studies-vec"
+
+[ai]
+binding = "AI"

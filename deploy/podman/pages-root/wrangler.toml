@@ -1,0 +1,27 @@
+# Local pages:dev project root for the podman stack. Run wrangler from THIS
+# directory (see deploy/podman/README.md):
+#   cd deploy/podman/pages-root
+#   npx wrangler pages dev ../../../.next/out
+#
+# Why this exists: wrangler 4 `pages dev` proxies the [ai] binding through
+# Cloudflare and demands CLOUDFLARE_API_TOKEN even in local dev (custom -c
+# config paths are rejected for Pages). This config is wrangler.toml minus the
+# [ai] binding — the functions never touch env.AI when AI_BASE_URL is set (see
+# the .dev.vars symlink). Keep everything else in sync with wrangler.toml.
+name = "ksadb"
+pages_build_output_dir = ".next/out"
+compatibility_date = "2024-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ksadb-db"
+database_id = "2cb05812-7c51-4078-ba20-9d0ca90cc7e6"
+migrations_dir = "../../../migrations"
+
+[[r2_buckets]]
+binding = "AGGREGATES"
+bucket_name = "ksadb-aggregates"
+
+[[vectorize]]
+binding = "STUDIES_INDEX"
+index_name = "studies-vec"

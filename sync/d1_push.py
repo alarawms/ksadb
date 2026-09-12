@@ -4,6 +4,7 @@ Two output modes:
 - REST API (production / GitHub Actions): batched statement posts.
 - SQL files (local dev): for `wrangler d1 execute --file`.
 """
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +23,12 @@ RUN_TABLE_COLUMNS = [
 DEFAULT_BASE_URL = "https://api.cloudflare.com/client/v4"
 DEFAULT_BATCH = 25        # statements per REST request
 DEFAULT_FILE_CHUNK = 2000  # statements per .sql file
+
+
+def cf_base_url() -> str:
+    """Cloudflare REST base. CF_API_BASE_URL overrides it for local stacks
+    (e.g. the podman d1-shim); unset means production behavior."""
+    return os.environ.get("CF_API_BASE_URL", DEFAULT_BASE_URL)
 
 
 class D1Error(RuntimeError):
