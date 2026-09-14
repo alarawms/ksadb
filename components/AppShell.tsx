@@ -3,9 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { ThemeToggle } from "./ThemeToggle";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/explore", label: "Explore" },
+  { href: "/insights", label: "Insights" },
+  { href: "/collection", label: "Collection" },
   { href: "/search", label: "Search" },
   { href: "/samples", label: "Samples" },
   { href: "/pathogens", label: "Pathogens" },
@@ -61,6 +65,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               className="input w-full"
             />
           </form>
+          <span className="badge badge-accent shrink-0"
+            title="All list views are filtered to ENA country=SA">
+            Saudi scope
+          </span>
+          <ThemeToggle />
         </div>
       </header>
 

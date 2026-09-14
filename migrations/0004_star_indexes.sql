@@ -1,0 +1,10 @@
+CREATE INDEX IF NOT EXISTS idx_enaruns_study ON ena_runs(study_accession);
+CREATE INDEX IF NOT EXISTS idx_enaruns_sample ON ena_runs(biosample_accession);
+CREATE INDEX IF NOT EXISTS idx_enaruns_platform ON ena_runs(platform);
+CREATE INDEX IF NOT EXISTS idx_enaruns_strategy ON ena_runs(library_strategy);
+CREATE INDEX IF NOT EXISTS idx_enaruns_submitted ON ena_runs(submitted_date);
+CREATE INDEX IF NOT EXISTS idx_samples_country ON samples(country);
+CREATE INDEX IF NOT EXISTS idx_samples_region ON samples(region);
+CREATE INDEX IF NOT EXISTS idx_samples_organism ON samples(organism);
+CREATE INDEX IF NOT EXISTS idx_samples_host ON samples(host);
+CREATE INDEX IF NOT EXISTS idx_studies_submitter ON studies(submitter_id);

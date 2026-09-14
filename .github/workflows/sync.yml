@@ -5,6 +5,10 @@ on:
   workflow_dispatch:
 jobs:
   sync:
+    # The v1 full re-push costs ~47k row writes; it only needs to run from
+    # the scheduled nightly cron (once). Manual/branch dispatches skip it —
+    # the v2 job below is what they exist to trigger.
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,3 +22,54 @@ jobs:
           D1_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
           D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+  v2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas requests
+      - name: Sync ENA portal slice to star schema
+        run: python -m sync.cli pull-v2
+        env:
+          D1_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          # Free-tier write budget is 100k rows/day and the scheduled v1 job
+          # uses ~47k of it, so pace the v2 bootstrap: ~40k new runs/night,
+          # resumed automatically each night. Raise/unset to scale up.
+          V2_MAX_RUNS: "40000"
+      - name: Precompute aggregates
+        run: python -m sync.cli aggregate --out-dir aggregates
+        env:
+          D1_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+      - name: Push aggregates to R2
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Default wrangler 3.x: `r2 object put` overwrites silently in
+          # non-interactive mode (no --force needed — that's a 4.x flag, and
+          # pinning 4.x breaks npx via a workers-types peer conflict).
+          # wrangler has no `r2 object put --dir`, and wrangler-action runs
+          # each line as a separate wrangler invocation (no shell), so list the
+          # puts explicitly. Keys mirror the endpoint's aggregates/<name>.json.
+          command: |
+            r2 object put ksadb-aggregates/aggregates/summary.json --file aggregates/summary.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-month.json --file aggregates/by-month.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-country.json --file aggregates/by-country.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-region.json --file aggregates/by-region.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-organism.json --file aggregates/by-organism.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-submitter.json --file aggregates/by-submitter.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-platform.json --file aggregates/by-platform.json --content-type application/json
+            r2 object put ksadb-aggregates/aggregates/by-strategy.json --file aggregates/by-strategy.json --content-type application/json
+      - name: Embed new studies into Vectorize
+        run: python -m sync.cli embed
+        env:
+          D1_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

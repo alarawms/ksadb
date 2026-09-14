@@ -15,7 +15,7 @@ function Flags({ r }: { r: RunItem }) {
 
 export function RunsTable({ runs }: { runs: RunItem[] }) {
   return (
-    <table className="w-full text-left text-sm">
+    <table className="table-zebra w-full text-left text-sm">
       <thead style={{ background: "var(--surface-2)", borderColor: "var(--border)" }} className="border-b">
         <tr>
           <th className="th">Run</th>

@@ -1,0 +1,5 @@
+{
+  "name": "ksadb-pages-local",
+  "private": true,
+  "description": "Anchor for wrangler pages dev in the podman local stack: makes wrangler treat deploy/podman/pages-root as the Pages project root (nearest package.json wins), so its wrangler.toml (no [ai] binding) is the one the dev runtime reloads. See deploy/podman/README.md."
+}
