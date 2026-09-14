@@ -1,0 +1,510 @@
+# Review package: decc84a..HEAD
+
+## Commits
+1e15d65 feat(graph): facet rail with canvas dimming and search deep-link
+
+## Files changed
+ components/graph/FacetRail.test.tsx   |  65 +++++++++++++++++++
+ components/graph/FacetRail.tsx        | 114 ++++++++++++++++++++++++++++++++++
+ components/graph/GraphCanvas.tsx      |  11 ++--
+ components/graph/GraphHub.tsx         |  28 ++++++++-
+ components/graph/graph-layout.test.ts |  19 +++++-
+ components/graph/graph-layout.ts      |  24 +++++++
+ 6 files changed, 252 insertions(+), 9 deletions(-)
+
+## Diff
+diff --git a/components/graph/FacetRail.test.tsx b/components/graph/FacetRail.test.tsx
+new file mode 100644
+index 0000000..acc5be3
+--- /dev/null
++++ b/components/graph/FacetRail.test.tsx
+@@ -0,0 +1,65 @@
++// @vitest-environment happy-dom
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import FacetRail, { type FacetGroups } from "./FacetRail";
++
++afterEach(cleanup);
++
++const GROUPS: FacetGroups = {
++  domain: [{ value: "human", count: 3 }, { value: "other", count: 2 }],
++  region: [{ value: "Riyadh", count: 120 }, { value: "Jeddah", count: 40 }],
++  platform: [{ value: "ILLUMINA", count: 9000 }, { value: "OXFORD_NANOPORE", count: 300 }],
++  years: [2024, 2023],
++};
++
++describe("FacetRail", () => {
++  it("renders chips for every group", () => {
++    render(<FacetRail facets={GROUPS} active={{}} onChange={() => {}} />);
++    expect(screen.getByRole("button", { name: /human \(3\)/ })).toBeTruthy();
++    expect(screen.getByRole("button", { name: /Riyadh \(120\)/ })).toBeTruthy();
++    expect(screen.getByRole("button", { name: /ILLUMINA \(9,000\)/ })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "2024" })).toBeTruthy();
++  });
++
++  it("clicking a chip calls onChange with the facet set", () => {
++    const onChange = vi.fn();
++    render(<FacetRail facets={GROUPS} active={{}} onChange={onChange} />);
++    fireEvent.click(screen.getByRole("button", { name: /human \(3\)/ }));
++    expect(onChange).toHaveBeenCalledWith({ domain: "human" });
++    fireEvent.click(screen.getByRole("button", { name: "2023" }));
++    expect(onChange).toHaveBeenCalledWith({ year: 2023 });
++  });
++
++  it("clicking an active chip calls onChange with it cleared", () => {
++    const onChange = vi.fn();
++    render(<FacetRail facets={GROUPS} active={{ domain: "human" }} onChange={onChange} />);
++    fireEvent.click(screen.getByRole("button", { name: /human \(3\)/ }));
++    expect(onChange).toHaveBeenCalledWith({});
++  });
++
++  it("active chip has the badge-accent class", () => {
++    render(<FacetRail facets={GROUPS} active={{ platform: "ILLUMINA" }} onChange={() => {}} />);
++    const chip = screen.getByRole("button", { name: /ILLUMINA \(9,000\)/ });
++    expect(chip.className).toContain("badge-accent");
++    expect(screen.getByRole("button", { name: /OXFORD_NANOPORE \(300\)/ }).className)
++      .not.toContain("badge-accent");
++  });
++
++  it("links to /search with the equivalent params when a facet is active", () => {
++    render(<FacetRail facets={GROUPS}
++      active={{ region: "Riyadh", platform: "ILLUMINA", year: 2023 }}
++      onChange={() => {}} />);
++    const link = screen.getByRole("link", { name: /matching runs/ }) as HTMLAnchorElement;
++    expect(link.pathname).toBe("/search");
++    const qs = new URLSearchParams(link.search);
++    expect(qs.get("region")).toBe("Riyadh");
++    expect(qs.get("platform")).toBe("ILLUMINA");
++    expect(qs.get("from")).toBe("2023-01-01");
++    expect(qs.get("to")).toBe("2023-12-31");
++  });
++
++  it("hides the search link when nothing is active", () => {
++    render(<FacetRail facets={GROUPS} active={{}} onChange={() => {}} />);
++    expect(screen.queryByRole("link", { name: /matching runs/ })).toBeNull();
++  });
++});
+diff --git a/components/graph/FacetRail.tsx b/components/graph/FacetRail.tsx
+new file mode 100644
+index 0000000..db11b26
+--- /dev/null
++++ b/components/graph/FacetRail.tsx
+@@ -0,0 +1,114 @@
++"use client";
++
++import { HUMAN_COLORS, type ActiveFacets, type GraphNode, type HumanClass } from "./graph-layout";
++
++export interface FacetValue { value: string; count: number }
++export interface FacetGroups {
++  domain: FacetValue[];
++  region: FacetValue[];
++  platform: FacetValue[];
++  years: number[];
++}
++
++const headingCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]";
++// The rail is a compact sidebar; cap the long tail so it stays scannable.
++const MAX_CHIPS = 12;
++
++// Client-side groups from the loaded graph nodes: domain counts come from
++// node facets, regions from the region-type nodes in view, years expanded
++// from each node's years range. (The /v2/search/facets endpoint has no
++// region or year key — platform comes from there, see GraphHub.)
++export function groupsFromNodes(nodes: GraphNode[]): Pick<FacetGroups, "domain" | "region" | "years"> {
++  const domainCounts = new Map<string, number>();
++  const years = new Set<number>();
++  for (const n of nodes) {
++    if (n.facets?.domain) {
++      domainCounts.set(n.facets.domain, (domainCounts.get(n.facets.domain) ?? 0) + 1);
++    }
++    const [y0, y1] = n.facets?.years ?? [];
++    if (y0 !== undefined && y1 !== undefined) {
++      for (let y = y0; y <= y1; y++) years.add(y);
++    }
++  }
++  const domain = (["human", "human_associated", "other"] as HumanClass[])
++    .filter((d) => domainCounts.has(d))
++    .map((d) => ({ value: d, count: domainCounts.get(d)! }));
++  const region = nodes
++    .filter((n) => n.type === "region")
++    .map((n) => ({ value: n.label, count: n.count ?? 0 }))
++    .sort((a, b) => b.count - a.count)
++    .slice(0, MAX_CHIPS);
++  return { domain, region, years: [...years].sort((a, b) => b - a).slice(0, MAX_CHIPS) };
++}
++
++// Deep-link params mirror functions/api/v2/_lib/filters.ts (parseV2Filters):
++// region/platform map 1:1, a single year becomes a from/to submitted-date
++// range. Domain is a graph-only classification with no search-v2 param.
++function searchHref(active: ActiveFacets): string | null {
++  const qs = new URLSearchParams();
++  if (active.region) qs.set("region", active.region);
++  if (active.platform) qs.set("platform", active.platform);
++  if (active.year) {
++    qs.set("from", `${active.year}-01-01`);
++    qs.set("to", `${active.year}-12-31`);
++  }
++  const s = qs.toString();
++  return s ? `/search?${s}` : null;
++}
++
++export default function FacetRail({ facets, active, onChange }: {
++  facets: FacetGroups;
++  active: ActiveFacets;
++  onChange: (f: ActiveFacets) => void;
++}) {
++  // Toggle semantics: clicking a set chip clears it. `delete` (not undefined)
++  // keeps the object free of unset keys, so Object.keys(active) counts only
++  // real facets (GraphCanvas dims on that length).
++  const toggle = (key: keyof ActiveFacets, value: string | number) => {
++    const next: ActiveFacets = { ...active };
++    if (next[key] === value) delete next[key];
++    else (next as Record<string, string | number>)[key] = value;
++    onChange(next);
++  };
++
++  const groups: { key: keyof ActiveFacets; label: string; values: (FacetValue | number)[] }[] = [
++    { key: "domain", label: "Domain", values: facets.domain },
++    { key: "region", label: "Region", values: facets.region },
++    { key: "platform", label: "Platform", values: facets.platform },
++    { key: "year", label: "Year", values: facets.years },
++  ];
++  const href = searchHref(active);
++
++  return (
++    <aside className="card w-full shrink-0 p-3 xl:w-56" aria-label="Facet rail">
++      <div className="space-y-3">
++        {groups.filter((g) => g.values.length > 0).map((g) => (
++          <div key={g.key}>
++            <span className={headingCls}>{g.label}</span>
++            <div className="flex flex-wrap gap-1">
++              {g.values.map((v) => {
++                const value = typeof v === "number" ? v : v.value;
++                const label = typeof v === "number" ? String(v) : `${v.value} (${v.count.toLocaleString()})`;
++                const color = g.key === "domain" ? HUMAN_COLORS[value as HumanClass] : undefined;
++                return (
++                  <button key={label}
++                    className={`badge ${active[g.key] === value ? "badge-accent" : ""}`}
++                    onClick={() => toggle(g.key, value)}>
++                    {color && (
++                      <span className="mr-1 inline-block h-2.5 w-2.5 rounded-full align-middle"
++                        style={{ background: color }} />
++                    )}
++                    {label}
++                  </button>
++                );
++              })}
++            </div>
++          </div>
++        ))}
++      </div>
++      {href && (
++        <a className="btn mt-3" href={href}>matching runs →</a>
++      )}
++    </aside>
++  );
++}
+diff --git a/components/graph/GraphCanvas.tsx b/components/graph/GraphCanvas.tsx
+index 01d151d..d258c4d 100644
+--- a/components/graph/GraphCanvas.tsx
++++ b/components/graph/GraphCanvas.tsx
+@@ -4,36 +4,37 @@ import { useEffect, useRef, useState } from "react";
+ import { drag, type D3DragEvent } from "d3-drag";
+ import { select } from "d3-selection";
+ import "d3-transition";
+ import { zoom as d3zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior } from "d3-zoom";
+ import {
+   forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation,
+   type SimulationNodeDatum,
+ } from "d3-force";
+ 
+ import {
+-  filterNodes, HUMAN_COLORS, isDimmed, neighborIds, NODE_COLORS, visibleLabelIds, ZOOM_EXTENT,
+-  type GraphData, type GraphEdge, type GraphNode, type HumanClass,
++  facetMatch, filterNodes, HUMAN_COLORS, isDimmed, neighborIds, NODE_COLORS, visibleLabelIds, ZOOM_EXTENT,
++  type ActiveFacets, type GraphData, type GraphEdge, type GraphNode, type HumanClass,
+ } from "./graph-layout";
+ 
+ type Filter = "all" | HumanClass;
+ type SimNode = GraphNode & SimulationNodeDatum;
+ type SimEdge = Omit<GraphEdge, "source" | "target"> & { source: string | SimNode; target: string | SimNode };
+ 
+ function nodeColor(n: GraphNode): string {
+   if (n.type === "organism" && n.human_class) return HUMAN_COLORS[n.human_class];
+   return NODE_COLORS[n.type];
+ }
+ 
+-export default function GraphCanvas({ data, filter, onNodeSelect, onNodeFocus, onBackgroundClick }: {
++export default function GraphCanvas({ data, filter, activeFacets, onNodeSelect, onNodeFocus, onBackgroundClick }: {
+   data: GraphData;
+   filter: Filter;
++  activeFacets?: ActiveFacets;
+   onNodeSelect: (n: GraphNode) => void;
+   onNodeFocus: (n: GraphNode) => void;
+   onBackgroundClick?: () => void;
+ }) {
+   const svgRef = useRef<SVGSVGElement>(null);
+   const gRef = useRef<SVGGElement>(null);
+   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+   const [nodes, setNodes] = useState<SimNode[]>([]);
+   const [edges, setEdges] = useState<SimEdge[]>([]);
+   const [hoverId, setHoverId] = useState<string | null>(null);
+@@ -261,21 +262,23 @@ export default function GraphCanvas({ data, filter, onNodeSelect, onNodeFocus, o
+                 return (
+                   <line key={i} x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+                     stroke="var(--border)" strokeOpacity={dimmed ? 0.08 : 0.6} />
+                 );
+               })}
+             </g>
+             <g>
+               {nodes.map((n) => {
+                 const dimFilter = isDimmed(n, filter);
+                 const dimHover = neighbors !== null && !neighbors.has(n.id);
+-                const dimmed = dimFilter || dimHover;
++                const dimFacet = !!activeFacets && Object.keys(activeFacets).length > 0 &&
++                  !facetMatch(n.facets, activeFacets);
++                const dimmed = dimFilter || dimHover || dimFacet;
+                 const r = 6 + Math.min(14, Math.log2(n.count ?? 1));
+                 return (
+                   <g key={n.id} className="graph-node"
+                     transform={`translate(${n.x ?? 0},${n.y ?? 0})`}
+                     opacity={dimmed ? 0.15 : 1}
+                     style={{ cursor: "pointer" }}
+                     onClick={() => handleClick(n)}
+                     onDoubleClick={() => handleDoubleClick(n)}
+                     onMouseEnter={() => setHoverId(n.id)}
+                     onMouseLeave={() => setHoverId((h) => (h === n.id ? null : h))}>
+diff --git a/components/graph/GraphHub.tsx b/components/graph/GraphHub.tsx
+index 0b5685b..4d2f093 100644
+--- a/components/graph/GraphHub.tsx
++++ b/components/graph/GraphHub.tsx
+@@ -1,19 +1,22 @@
+ "use client";
+ 
+ import { useRouter } from "next/navigation";
+-import { useEffect, useState } from "react";
++import { useEffect, useMemo, useState } from "react";
+ 
++import type { V2FacetsResponse } from "@/lib/api";
++import { useQuery } from "@/lib/useQuery";
+ import {
+   HUMAN_COLORS, NODE_COLORS,
+-  type DetailPayload, type GraphData, type GraphNode, type HumanClass, type NodeType,
++  type ActiveFacets, type DetailPayload, type GraphData, type GraphNode, type HumanClass, type NodeType,
+ } from "./graph-layout";
++import FacetRail, { groupsFromNodes } from "./FacetRail";
+ import GraphCanvas from "./GraphCanvas";
+ import Inspector from "./Inspector";
+ 
+ type Filter = "all" | HumanClass;
+ 
+ const NODE_TYPES: NodeType[] = [
+   "submitter", "study", "sample", "organism", "taxon",
+   "platform", "strategy", "region", "publication", "term",
+ ];
+ const HUMAN_CLASSES: HumanClass[] = ["human", "human_associated", "other"];
+@@ -21,37 +24,44 @@ const HUMAN_CLASSES: HumanClass[] = ["human", "human_associated", "other"];
+ // Stable empty input so the canvas (and its toolbar) can render while the
+ // graph data is still being fetched, without re-running the effect below.
+ const EMPTY_DATA: GraphData = { nodes: [], edges: [] };
+ 
+ export default function GraphHub({ focus }: { focus: string | null }) {
+   const router = useRouter();
+   const [data, setData] = useState<GraphData | null>(null);
+   const [loading, setLoading] = useState(true);
+   const [error, setError] = useState<string | null>(null);
+   const [filter, setFilter] = useState<Filter>("all");
++  const [active, setActive] = useState<ActiveFacets>({});
+   const [selected, setSelected] = useState<GraphNode | null>(null);
+   const [detail, setDetail] = useState<DetailPayload | null>(null);
+   const [detailError, setDetailError] = useState<string | null>(null);
+ 
++  // Facet options: platforms from the shared /v2/search/facets endpoint
++  // (Saudi-scoped, cached); domain/region/years derived from the loaded
++  // graph nodes themselves (see groupsFromNodes).
++  const facetsRes = useQuery<V2FacetsResponse>("/v2/search/facets");
++
+   useEffect(() => {
+     let cancelled = false;
+     setLoading(true);
+     setError(null);
+     const url = `/api/v2/graph${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`;
+     fetch(url, { cache: "no-store" })
+       .then(async (res) => {
+         if (!res.ok) throw new Error(`API /v2/graph -> ${res.status}`);
+         return res.json() as Promise<GraphData>;
+       })
+       .then((d) => {
+         if (!cancelled) {
+           setData(d);
++          setActive({});
+           setLoading(false);
+         }
+       })
+       .catch((err) => {
+         if (!cancelled) {
+           setError(String(err));
+           setLoading(false);
+         }
+       });
+     return () => {
+@@ -97,20 +107,25 @@ export default function GraphHub({ focus }: { focus: string | null }) {
+   const onFocusId = (id: string) => {
+     router.push(`/graph?focus=${encodeURIComponent(id)}`);
+   };
+ 
+   const onClose = () => {
+     setSelected(null);
+     setDetail(null);
+     setDetailError(null);
+   };
+ 
++  const groups = useMemo(() => ({
++    ...groupsFromNodes(data?.nodes ?? []),
++    platform: (facetsRes.data?.platforms ?? []).map((p) => ({ value: p.name, count: p.runs })),
++  }), [data, facetsRes.data]);
++
+   return (
+     <div className="space-y-4">
+       <div className="flex items-center gap-4">
+         <div>
+           <h1 className="text-2xl font-bold">Knowledge graph</h1>
+           {focus && <p className="text-sm text-[var(--text-dim)]">{focus}</p>}
+         </div>
+         {focus && (
+           <button className="btn ml-auto shrink-0" onClick={() => router.push("/graph")}>
+             ← Back to overview
+@@ -137,28 +152,35 @@ export default function GraphHub({ focus }: { focus: string | null }) {
+           >
+             {f !== "all" && (
+               <span
+                 className="mr-1 inline-block h-2.5 w-2.5 rounded-full align-middle"
+                 style={{ background: HUMAN_COLORS[f as HumanClass] }}
+               />
+             )}
+             {f === "all" ? "all" : f}
+           </button>
+         ))}
++        <span className="mx-1 text-[var(--text-dim)]">|</span>
++        <span className="inline-flex items-center gap-1 text-[var(--text-dim)]">
++          <span className="inline-block h-2.5 w-2.5 rounded-full border-2"
++            style={{ borderColor: "var(--accent)" }} />
++          recent ≤180d
++        </span>
+       </div>
+ 
+       {error && <p className="text-danger">{error}</p>}
+       {loading && <p className="text-dim">Loading graph…</p>}
+       {detailError && <p className="text-danger">{detailError}</p>}
+       <div className="flex flex-col items-start gap-4 xl:flex-row">
++        <FacetRail facets={groups} active={active} onChange={setActive} />
+         <div className="min-w-0 flex-1 self-stretch">
+-          <GraphCanvas data={data ?? EMPTY_DATA} filter={filter}
++          <GraphCanvas data={data ?? EMPTY_DATA} filter={filter} activeFacets={active}
+             onNodeSelect={onNodeSelect} onNodeFocus={onNodeFocus}
+             onBackgroundClick={selected ? onClose : undefined} />
+         </div>
+         {selected && (
+           <Inspector node={selected} detail={detail}
+             onClose={onClose} onFocus={onFocusId}
+             onOpen={(link) => router.push(link)}
+             onSearch={(href) => router.push(href)} />
+         )}
+       </div>
+diff --git a/components/graph/graph-layout.test.ts b/components/graph/graph-layout.test.ts
+index 75411c8..d09d8dd 100644
+--- a/components/graph/graph-layout.test.ts
++++ b/components/graph/graph-layout.test.ts
+@@ -1,26 +1,41 @@
+ import { describe, expect, it } from "vitest";
+ import {
+-  filterNodes, isDimmed, neighborIds, NODE_COLORS, HUMAN_COLORS,
+-  visibleLabelIds, ZOOM_LABEL_THRESHOLD, type GraphEdge, type GraphNode, type NodeType,
++  facetMatch, filterNodes, isDimmed, neighborIds, NODE_COLORS, HUMAN_COLORS,
++  visibleLabelIds, ZOOM_LABEL_THRESHOLD, type GraphEdge, type GraphNode, type NodeFacets, type NodeType,
+ } from "./graph-layout";
+ 
+ const nodes: GraphNode[] = [
+   { id: "study:A", type: "study", label: "Camel Microbiome" },
+   { id: "sample:S1", type: "sample", label: "SRR1" },
+   { id: "organism:O1", type: "organism", label: "Camelus dromedarius" },
+ ];
+ const edges: GraphEdge[] = [
+   { source: "study:A", target: "sample:S1", kind: "samples" },
+   { source: "sample:S1", target: "organism:O1", kind: "classifies" },
+ ];
+ 
++describe("facetMatch", () => {
++  const f: NodeFacets = { domain: "human", region: "Riyadh", platforms: ["ILLUMINA"], years: [2020, 2024] as [number, number] };
++  it("passes when every active facet matches", () => {
++    expect(facetMatch(f, { domain: "human", region: "Riyadh", platform: "ILLUMINA", year: 2022 })).toBe(true);
++  });
++  it("fails on any mismatch and on missing facet info", () => {
++    expect(facetMatch(f, { domain: "other" })).toBe(false);
++    expect(facetMatch(f, { year: 1999 })).toBe(false);
++    expect(facetMatch(undefined, { platform: "ILLUMINA" })).toBe(false);
++  });
++  it("empty active facets passes everything", () => {
++    expect(facetMatch(undefined, {})).toBe(true);
++  });
++});
++
+ describe("neighborIds", () => {
+   it("returns self plus direct neighbors", () => {
+     expect(neighborIds(edges, "sample:S1")).toEqual(new Set(["sample:S1", "study:A", "organism:O1"]));
+   });
+   it("returns only self for isolated or unknown node", () => {
+     expect(neighborIds(edges, "term:T1")).toEqual(new Set(["term:T1"]));
+   });
+ });
+ 
+ describe("visibleLabelIds", () => {
+diff --git a/components/graph/graph-layout.ts b/components/graph/graph-layout.ts
+index 39341f3..9a30b74 100644
+--- a/components/graph/graph-layout.ts
++++ b/components/graph/graph-layout.ts
+@@ -33,20 +33,44 @@ export const HUMAN_COLORS: Record<HumanClass, string> = {
+ 
+ export function isDimmed(
+   n: Pick<GraphNode, "type" | "human_class">,
+   filter: "all" | HumanClass
+ ): boolean {
+   if (filter === "all") return false;
+   if (n.type !== "organism" && n.type !== "sample" && n.type !== "taxon") return false;
+   return n.human_class !== filter;
+ }
+ 
++// ---- facet rail dimming: every set facet ANDed against the node's facets ----
++
++export interface ActiveFacets { domain?: string; region?: string; platform?: string; year?: number }
++
++// True when the node passes every set facet. Nodes without facet info fail
++// as soon as any facet is active; platforms match by intersection; a node's
++// years range must include the active year.
++export function facetMatch(
++  f: GraphNode["facets"] | undefined,
++  active: ActiveFacets
++): boolean {
++  if (Object.values(active).every((v) => v === undefined)) return true;
++  if (!f) return false;
++  if (active.domain !== undefined && f.domain !== active.domain) return false;
++  if (active.region !== undefined && f.region !== active.region) return false;
++  if (active.platform !== undefined && !(f.platforms ?? []).includes(active.platform)) return false;
++  if (active.year !== undefined) {
++    const [y0, y1] = f.years ?? [];
++    if (y0 === undefined || y1 === undefined) return false;
++    if (active.year < y0 || active.year > y1) return false;
++  }
++  return true;
++}
++
+ export const ZOOM_LABEL_THRESHOLD = 1.5;
+ export const ZOOM_EXTENT: [number, number] = [0.2, 8];
+ 
+ export function neighborIds(edges: GraphEdge[], id: string): Set<string> {
+   const out = new Set<string>([id]);
+   for (const e of edges) {
+     if (e.source === id) out.add(e.target);
+     if (e.target === id) out.add(e.source);
+   }
+   return out;

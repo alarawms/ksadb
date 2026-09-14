@@ -1,0 +1,804 @@
+# Review package: c78d682..HEAD
+
+## Commits
+decc84a feat(graph): inspector panel with click-to-select, focus on double-click, recency rings
+
+## Files changed
+ components/graph/GraphCanvas.test.tsx |  58 +++++++--
+ components/graph/GraphCanvas.tsx      |  30 ++++-
+ components/graph/GraphHub.tsx         |  65 +++++++++-
+ components/graph/Inspector.test.tsx   |  68 ++++++++++
+ components/graph/Inspector.tsx        | 225 ++++++++++++++++++++++++++++++++++
+ components/graph/graph-layout.ts      |  10 +-
+ 6 files changed, 436 insertions(+), 20 deletions(-)
+
+## Diff
+diff --git a/components/graph/GraphCanvas.test.tsx b/components/graph/GraphCanvas.test.tsx
+index a127711..1e0624b 100644
+--- a/components/graph/GraphCanvas.test.tsx
++++ b/components/graph/GraphCanvas.test.tsx
+@@ -2,35 +2,39 @@
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+ import GraphCanvas from "./GraphCanvas";
+ import type { GraphData } from "./graph-layout";
+ 
+ afterEach(cleanup);
+ 
+ const fixture: GraphData = {
+   nodes: [
+     { id: "study-1", type: "study", label: "Study Alpha", count: 12, link: "/study/1" },
+-    { id: "sample-1", type: "sample", label: "Sample Beta", count: 3 },
++    { id: "sample-1", type: "sample", label: "Sample Beta", count: 3, recent: true },
+   ],
+   edges: [
+     { source: "study-1", target: "sample-1", kind: "has_sample", count: 3 },
+   ],
+ };
+ 
+-async function renderCanvas() {
+-  const onNodeClick = vi.fn();
+-  const utils = render(<GraphCanvas data={fixture} filter="all" onNodeClick={onNodeClick} />);
++async function renderCanvas(extra?: { onBackgroundClick?: () => void }) {
++  const onNodeSelect = vi.fn();
++  const onNodeFocus = vi.fn();
++  const utils = render(
++    <GraphCanvas data={fixture} filter="all" onNodeSelect={onNodeSelect} onNodeFocus={onNodeFocus}
++      {...(extra ?? {})} />
++  );
+   // Nodes enter the DOM only after the simulation's first tick.
+   await waitFor(() => {
+     expect(utils.container.querySelectorAll("g.graph-node").length).toBe(2);
+   });
+-  return { onNodeClick, ...utils };
++  return { onNodeSelect, onNodeFocus, ...utils };
+ }
+ 
+ describe("GraphCanvas", () => {
+   it("renders nodes and edges from the fixture graph", async () => {
+     const { container } = await renderCanvas();
+     expect(container.querySelectorAll("g.graph-node").length).toBe(2);
+     expect(container.querySelectorAll("line").length).toBe(1);
+   });
+ 
+   it("search input filters and shows matches", async () => {
+@@ -51,53 +55,89 @@ describe("GraphCanvas", () => {
+     fireEvent.change(input, { target: { value: "beta" } });
+     await screen.findByRole("button", { name: /Sample Beta/ });
+     fireEvent.keyDown(input, { key: "Escape" });
+     expect(input.value).toBe("");
+   });
+ 
+   it("shows tooltip content on node hover", async () => {
+     await renderCanvas();
+     const node = document.querySelector("g.graph-node") as SVGGElement;
+     fireEvent.mouseEnter(node);
+-    expect(await screen.findByText("click to open")).toBeTruthy();
++    expect(await screen.findByText("click for details · double-click to focus")).toBeTruthy();
+     expect(screen.getAllByText("Study Alpha").length).toBeGreaterThan(0);
+     fireEvent.mouseLeave(node);
+-    await waitFor(() => expect(screen.queryByText("click to open")).toBeNull());
++    await waitFor(() => expect(screen.queryByText("click for details · double-click to focus")).toBeNull());
+   });
+ 
+   it("zoom control buttons mutate the <g> transform", async () => {
+     const { container } = await renderCanvas();
+     const g = container.querySelector("svg > g") as SVGGElement;
+     const before = g.getAttribute("transform");
+     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+     await waitFor(() => {
+       expect(g.getAttribute("transform")).not.toBe(before);
+     });
+     expect(screen.getByRole("button", { name: "Zoom out" })).toBeTruthy();
+     expect(screen.getByRole("button", { name: "Fit" })).toBeTruthy();
+   });
+ 
+   it("mouse drag on a node does not throw and does not swallow clicks", async () => {
+     const errors: Error[] = [];
+     window.addEventListener("error", (e) => errors.push(e.error as Error));
+-    const { container, onNodeClick } = await renderCanvas();
++    const { container, onNodeSelect } = await renderCanvas();
+     const node = container.querySelector("g.graph-node") as SVGGElement;
+     // happy-dom's SVGPoint lacks matrixTransform, which d3-selection's pointer
+     // math needs; stub the svg geometry so d3-drag can compute a position.
+     const svg = container.querySelector("svg") as SVGSVGElement;
+     svg.createSVGPoint = () =>
+       ({ x: 0, y: 0, matrixTransform: () => ({ x: 0, y: 0 }) }) as unknown as DOMPoint;
+     svg.getScreenCTM = () => ({ inverse: () => ({}) }) as unknown as DOMMatrix;
+     // Regression pin for the d3 datum join: without __data__ on the <g>, the
+     // drag start handler throws on d.fx and the end handler's setTimeout never
+     // resets draggedRef, permanently swallowing node clicks.
+     fireEvent.mouseDown(node, { button: 0, clientX: 10, clientY: 10, view: window });
+     fireEvent.mouseMove(window, { clientX: 30, clientY: 30 });
+     fireEvent.mouseUp(window, { view: window });
+     expect(errors).toEqual([]);
+     // draggedRef resets in the drag-end handler's setTimeout(0); in a real
+     // browser mouseup and click are separate tasks, so yield a macrotask.
+     await new Promise((r) => setTimeout(r, 0));
+     fireEvent.click(node);
+-    expect(onNodeClick).toHaveBeenCalledTimes(1);
++    expect(onNodeSelect).toHaveBeenCalledTimes(1);
++  });
++
++  it("single click selects, double click focuses", async () => {
++    const select = vi.fn();
++    const focus = vi.fn();
++    const { container } = render(
++      <GraphCanvas data={fixture} filter="all" onNodeSelect={select} onNodeFocus={focus} />);
++    // Labels render only on hover/zoom, so target the node <g> directly;
++    // fixture order guarantees the first node is "Study Alpha".
++    await waitFor(() => {
++      expect(container.querySelectorAll("g.graph-node").length).toBe(2);
++    });
++    const nodeEl = container.querySelector("g.graph-node")!;
++    fireEvent.click(nodeEl);
++    expect(select).toHaveBeenCalledTimes(1);
++    expect(focus).not.toHaveBeenCalled();
++    fireEvent.doubleClick(nodeEl);
++    expect(focus).toHaveBeenCalledTimes(1);
++  });
++
++  it("draws a recency ring under nodes flagged recent", async () => {
++    const { container } = await renderCanvas();
++    // "Sample Beta" is the fixture's recent node; its ring is an extra circle
++    // inside the same <g>, so the recent node has one more circle than the other.
++    const groups = Array.from(container.querySelectorAll("g.graph-node"));
++    const counts = groups.map((g) => g.querySelectorAll("circle").length).sort();
++    expect(counts).toEqual([1, 2]);
++  });
++
++  it("background click calls onBackgroundClick", async () => {
++    const onBackgroundClick = vi.fn();
++    const { container } = await renderCanvas({ onBackgroundClick });
++    const rect = container.querySelector("svg > g > rect");
++    expect(rect).toBeTruthy();
++    fireEvent.click(rect!);
++    expect(onBackgroundClick).toHaveBeenCalledTimes(1);
+   });
+ });
+diff --git a/components/graph/GraphCanvas.tsx b/components/graph/GraphCanvas.tsx
+index 5811194..01d151d 100644
+--- a/components/graph/GraphCanvas.tsx
++++ b/components/graph/GraphCanvas.tsx
+@@ -17,24 +17,26 @@ import {
+ 
+ type Filter = "all" | HumanClass;
+ type SimNode = GraphNode & SimulationNodeDatum;
+ type SimEdge = Omit<GraphEdge, "source" | "target"> & { source: string | SimNode; target: string | SimNode };
+ 
+ function nodeColor(n: GraphNode): string {
+   if (n.type === "organism" && n.human_class) return HUMAN_COLORS[n.human_class];
+   return NODE_COLORS[n.type];
+ }
+ 
+-export default function GraphCanvas({ data, filter, onNodeClick }: {
++export default function GraphCanvas({ data, filter, onNodeSelect, onNodeFocus, onBackgroundClick }: {
+   data: GraphData;
+   filter: Filter;
+-  onNodeClick: (n: GraphNode) => void;
++  onNodeSelect: (n: GraphNode) => void;
++  onNodeFocus: (n: GraphNode) => void;
++  onBackgroundClick?: () => void;
+ }) {
+   const svgRef = useRef<SVGSVGElement>(null);
+   const gRef = useRef<SVGGElement>(null);
+   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+   const [nodes, setNodes] = useState<SimNode[]>([]);
+   const [edges, setEdges] = useState<SimEdge[]>([]);
+   const [hoverId, setHoverId] = useState<string | null>(null);
+   const [zoomK, setZoomK] = useState(1);
+   const draggedRef = useRef(false);
+   const simNodesRef = useRef<SimNode[]>([]);
+@@ -62,20 +64,22 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+ 
+     const zoom = d3zoom<SVGSVGElement, unknown>()
+       .scaleExtent(ZOOM_EXTENT)
+       .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
+         g.setAttribute("transform", ev.transform.toString());
+         transformRef.current = ev.transform.toString();
+         setZoomK(ev.transform.k);
+       });
+     zoomRef.current = zoom;
+     const svgSel = select(svg).call(zoom);
++    // double-click focuses a node (handleDoubleClick), not d3's zoom-in
++    svgSel.on("dblclick.zoom", null);
+ 
+     dragRef.current = drag<SVGGElement, SimNode>()
+       .on("start", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+         // Keep the mousedown from reaching d3-zoom's svg listener, or the
+         // canvas pans while the node is being dragged.
+         ev.sourceEvent.stopPropagation();
+         draggedRef.current = false;
+         if (!ev.active) sim.alphaTarget(0.3).restart();
+         d.fx = d.x; d.fy = d.y;
+       })
+@@ -161,21 +165,26 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+     const y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+     const k = Math.min(800 / (x1 - x0), 600 / (y1 - y0), 2.5);
+     const t = zoomIdentity
+       .translate(400 - (k * (x0 + x1)) / 2, 300 - (k * (y0 + y1)) / 2)
+       .scale(k);
+     select(svg).transition().duration(600).call(zoom.transform, t);
+   };
+ 
+   const handleClick = (n: GraphNode) => {
+     if (draggedRef.current) return;
+-    onNodeClick(n);
++    onNodeSelect(n);
++  };
++
++  const handleDoubleClick = (n: GraphNode) => {
++    if (draggedRef.current) return;
++    onNodeFocus(n);
+   };
+ 
+   const coord = (p: string | SimNode): { x: number; y: number } =>
+     typeof p === "object" ? { x: p.x ?? 0, y: p.y ?? 0 } : { x: 0, y: 0 };
+ 
+   const hovered = hoverId ? nodes.find((n) => n.id === hoverId) ?? null : null;
+   const tipPos = hovered && hovered.x != null && hovered.y != null
+     ? svgPoint(hovered.x, hovered.y) : null;
+ 
+   return (
+@@ -230,47 +239,58 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+             if (svg && z) select(svg).transition().duration(200).call(z.scaleBy, 1 / 1.4);
+           }}>−</button>
+           <button className="btn" onClick={fitView}>Fit</button>
+         </div>
+       </div>
+ 
+       <div className="relative">
+         <svg ref={svgRef} viewBox="0 0 800 600" className="block h-auto w-full"
+           style={{ background: "var(--surface)", touchAction: "none" }} role="img">
+           <g ref={gRef}>
++            {onBackgroundClick && (
++              // transparent (not fill="none") so the interior is hit-testable:
++              // clicking empty canvas clears the inspector selection
++              <rect width={800} height={600} fill="transparent" onClick={onBackgroundClick} />
++            )}
+             <g>
+               {edges.map((e, i) => {
+                 const s = coord(e.source);
+                 const t = coord(e.target);
+                 const dimmed = neighbors !== null &&
+                   !(neighbors.has(String(typeof e.source === "object" ? e.source.id : e.source)) &&
+                     neighbors.has(String(typeof e.target === "object" ? e.target.id : e.target)));
+                 return (
+                   <line key={i} x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+                     stroke="var(--border)" strokeOpacity={dimmed ? 0.08 : 0.6} />
+                 );
+               })}
+             </g>
+             <g>
+               {nodes.map((n) => {
+                 const dimFilter = isDimmed(n, filter);
+                 const dimHover = neighbors !== null && !neighbors.has(n.id);
+                 const dimmed = dimFilter || dimHover;
++                const r = 6 + Math.min(14, Math.log2(n.count ?? 1));
+                 return (
+                   <g key={n.id} className="graph-node"
+                     transform={`translate(${n.x ?? 0},${n.y ?? 0})`}
+                     opacity={dimmed ? 0.15 : 1}
+                     style={{ cursor: "pointer" }}
+                     onClick={() => handleClick(n)}
++                    onDoubleClick={() => handleDoubleClick(n)}
+                     onMouseEnter={() => setHoverId(n.id)}
+                     onMouseLeave={() => setHoverId((h) => (h === n.id ? null : h))}>
+-                    <circle r={6 + Math.min(14, Math.log2(n.count ?? 1))}
++                    {n.recent && (
++                      <circle r={r + 4} fill="none" stroke="var(--accent)"
++                        strokeWidth={2} strokeOpacity={0.8} />
++                    )}
++                    <circle r={r}
+                       fill={nodeColor(n)} fillOpacity={0.9} stroke="var(--surface)" />
+                     {flashId === n.id && (
+                       <circle r={16} fill="none" stroke="var(--accent)"
+                         className="graph-flash" />
+                     )}
+                     {labels.has(n.id) && (
+                       <text dy={-10 - Math.min(14, Math.log2(n.count ?? 1))}
+                         textAnchor="middle" fontSize={10} fill="var(--text)"
+                         style={{ pointerEvents: "none" }}>
+                         {n.label}
+@@ -291,19 +311,19 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+           <div className="pointer-events-none absolute z-10 max-w-56 rounded border px-2 py-1 text-xs shadow"
+             style={{ left: tipPos.x * s, top: tipPos.y * s, transform: "translate(-50%, -120%)",
+                      background: "var(--surface)", borderColor: "var(--border)", color: "var(--text)" }}>
+             <div className="font-semibold">{hovered.label}</div>
+             <div className="text-[var(--text-dim)]">
+               {hovered.type}
+               {hovered.count != null && ` · ${hovered.count.toLocaleString()} runs`}
+               {hovered.human_class && ` · ${hovered.human_class}`}
+             </div>
+             <div className="text-[var(--text-dim)]">
+-              {hovered.link ? "click to open" : "click to explore"}
++              click for details · double-click to focus
+             </div>
+           </div>
+           );
+         })()}
+       </div>
+     </div>
+   );
+ }
+diff --git a/components/graph/GraphHub.tsx b/components/graph/GraphHub.tsx
+index c487da7..0b5685b 100644
+--- a/components/graph/GraphHub.tsx
++++ b/components/graph/GraphHub.tsx
+@@ -1,39 +1,43 @@
+ "use client";
+ 
+ import { useRouter } from "next/navigation";
+ import { useEffect, useState } from "react";
+ 
+ import {
+   HUMAN_COLORS, NODE_COLORS,
+-  type GraphData, type GraphNode, type HumanClass, type NodeType,
++  type DetailPayload, type GraphData, type GraphNode, type HumanClass, type NodeType,
+ } from "./graph-layout";
+ import GraphCanvas from "./GraphCanvas";
++import Inspector from "./Inspector";
+ 
+ type Filter = "all" | HumanClass;
+ 
+ const NODE_TYPES: NodeType[] = [
+   "submitter", "study", "sample", "organism", "taxon",
+   "platform", "strategy", "region", "publication", "term",
+ ];
+ const HUMAN_CLASSES: HumanClass[] = ["human", "human_associated", "other"];
+ 
+ // Stable empty input so the canvas (and its toolbar) can render while the
+ // graph data is still being fetched, without re-running the effect below.
+ const EMPTY_DATA: GraphData = { nodes: [], edges: [] };
+ 
+ export default function GraphHub({ focus }: { focus: string | null }) {
+   const router = useRouter();
+   const [data, setData] = useState<GraphData | null>(null);
+   const [loading, setLoading] = useState(true);
+   const [error, setError] = useState<string | null>(null);
+   const [filter, setFilter] = useState<Filter>("all");
++  const [selected, setSelected] = useState<GraphNode | null>(null);
++  const [detail, setDetail] = useState<DetailPayload | null>(null);
++  const [detailError, setDetailError] = useState<string | null>(null);
+ 
+   useEffect(() => {
+     let cancelled = false;
+     setLoading(true);
+     setError(null);
+     const url = `/api/v2/graph${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`;
+     fetch(url, { cache: "no-store" })
+       .then(async (res) => {
+         if (!res.ok) throw new Error(`API /v2/graph -> ${res.status}`);
+         return res.json() as Promise<GraphData>;
+@@ -48,25 +52,63 @@ export default function GraphHub({ focus }: { focus: string | null }) {
+         if (!cancelled) {
+           setError(String(err));
+           setLoading(false);
+         }
+       });
+     return () => {
+       cancelled = true;
+     };
+   }, [focus]);
+ 
+-  const onNodeClick = (n: GraphNode) => {
++  // Detail fetch follows the selection; a stale response (previous node or
++  // unmounted) must not land in the panel, same cancelled-flag pattern as above.
++  useEffect(() => {
++    if (!selected || selected.type === "publication") return;
++    let cancelled = false;
++    setDetail(null);
++    setDetailError(null);
++    fetch(`/api/v2/graph/detail?node=${encodeURIComponent(selected.id)}`, { cache: "no-store" })
++      .then(async (res) => {
++        if (!res.ok) throw new Error(`API /v2/graph/detail -> ${res.status}`);
++        return res.json() as Promise<DetailPayload>;
++      })
++      .then((d) => {
++        if (!cancelled) setDetail(d);
++      })
++      .catch((err) => {
++        if (!cancelled) setDetailError(String(err));
++      });
++    return () => {
++      cancelled = true;
++    };
++  }, [selected]);
++
++  const onNodeSelect = (n: GraphNode) => {
+     // publication placeholder nodes carry no data and no valid focus type
+     if (n.type === "publication") return;
+-    if (n.link) router.push(n.link);
+-    else router.push(`/graph?focus=${encodeURIComponent(n.id)}`);
++    setSelected(n);
++  };
++
++  const onNodeFocus = (n: GraphNode) => {
++    if (n.type === "publication") return;
++    router.push(`/graph?focus=${encodeURIComponent(n.id)}`);
++  };
++
++  // Inspector's "Focus graph" only has the node id, not the node object.
++  const onFocusId = (id: string) => {
++    router.push(`/graph?focus=${encodeURIComponent(id)}`);
++  };
++
++  const onClose = () => {
++    setSelected(null);
++    setDetail(null);
++    setDetailError(null);
+   };
+ 
+   return (
+     <div className="space-y-4">
+       <div className="flex items-center gap-4">
+         <div>
+           <h1 className="text-2xl font-bold">Knowledge graph</h1>
+           {focus && <p className="text-sm text-[var(--text-dim)]">{focus}</p>}
+         </div>
+         {focus && (
+@@ -99,14 +141,27 @@ export default function GraphHub({ focus }: { focus: string | null }) {
+                 style={{ background: HUMAN_COLORS[f as HumanClass] }}
+               />
+             )}
+             {f === "all" ? "all" : f}
+           </button>
+         ))}
+       </div>
+ 
+       {error && <p className="text-danger">{error}</p>}
+       {loading && <p className="text-dim">Loading graph…</p>}
+-      <GraphCanvas data={data ?? EMPTY_DATA} filter={filter} onNodeClick={onNodeClick} />
++      {detailError && <p className="text-danger">{detailError}</p>}
++      <div className="flex flex-col items-start gap-4 xl:flex-row">
++        <div className="min-w-0 flex-1 self-stretch">
++          <GraphCanvas data={data ?? EMPTY_DATA} filter={filter}
++            onNodeSelect={onNodeSelect} onNodeFocus={onNodeFocus}
++            onBackgroundClick={selected ? onClose : undefined} />
++        </div>
++        {selected && (
++          <Inspector node={selected} detail={detail}
++            onClose={onClose} onFocus={onFocusId}
++            onOpen={(link) => router.push(link)}
++            onSearch={(href) => router.push(href)} />
++        )}
++      </div>
+     </div>
+   );
+ }
+diff --git a/components/graph/Inspector.test.tsx b/components/graph/Inspector.test.tsx
+new file mode 100644
+index 0000000..9a41351
+--- /dev/null
++++ b/components/graph/Inspector.test.tsx
+@@ -0,0 +1,68 @@
++// @vitest-environment happy-dom
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import Inspector from "./Inspector";
++import type { DetailPayload, GraphNode } from "./graph-layout";
++
++afterEach(cleanup);
++
++function studyNode(): GraphNode {
++  return { id: "study:A", type: "study", label: "A", link: "/study?id=A" };
++}
++
++describe("Inspector", () => {
++  it("renders study detail fields and actions", () => {
++    const onFocus = vi.fn();
++    render(<Inspector node={studyNode()}
++      detail={{ type: "study", accession: "A", title: "T", runs: 3, bytes: 100, top_organisms: [{ name: "Homo sapiens", runs: 3 }], platforms: ["ILLUMINA"] } as DetailPayload}
++      onClose={() => {}} onFocus={onFocus} onOpen={() => {}} onSearch={() => {}} />);
++    expect(screen.getByText("Homo sapiens")).toBeTruthy();
++    expect(screen.getByText("3 runs")).toBeTruthy();
++    fireEvent.click(screen.getByText("Focus graph"));
++    expect(onFocus).toHaveBeenCalledWith("study:A");
++  });
++
++  it("close button calls onClose and Open page calls onOpen with node.link", () => {
++    const onClose = vi.fn();
++    const onOpen = vi.fn();
++    render(<Inspector node={studyNode()}
++      detail={{ type: "study", accession: "A" } as DetailPayload}
++      onClose={onClose} onFocus={() => {}} onOpen={onOpen} onSearch={() => {}} />);
++    fireEvent.click(screen.getByRole("button", { name: "Close" }));
++    expect(onClose).toHaveBeenCalledTimes(1);
++    fireEvent.click(screen.getByRole("button", { name: "Open page" }));
++    expect(onOpen).toHaveBeenCalledWith("/study?id=A");
++  });
++
++  it("disables Open page when the node has no link", () => {
++    render(<Inspector node={{ id: "term:T1", type: "term", label: "T1" }}
++      detail={{ type: "term", id: "T1", label: "L", runs: 1, samples: 2, top_studies: [] } as DetailPayload}
++      onClose={() => {}} onFocus={() => {}} onOpen={() => {}} onSearch={() => {}} />);
++    expect((screen.getByRole("button", { name: "Open page" }) as HTMLButtonElement).disabled).toBe(true);
++    // term nodes have no search mapping — the button is omitted
++    expect(screen.queryByRole("button", { name: /View runs in search/ })).toBeNull();
++  });
++
++  it("View runs in search maps node types to search hrefs", () => {
++    const onSearch = vi.fn();
++    const { rerender } = render(<Inspector
++      node={{ id: "organism:Homo sapiens", type: "organism", label: "Homo sapiens" }}
++      detail={{ type: "organism", name: "Homo sapiens", studies: 1, runs: 2 } as DetailPayload}
++      onClose={() => {}} onFocus={() => {}} onOpen={() => {}} onSearch={onSearch} />);
++    fireEvent.click(screen.getByRole("button", { name: "View runs in search" }));
++    expect(onSearch).toHaveBeenCalledWith("/search?organism=Homo%20sapiens");
++
++    rerender(<Inspector node={{ id: "sample:SAMEA1", type: "sample", label: "SAMEA1" }}
++      detail={{ type: "sample", accession: "SAMEA1", runs: 1, bytes: 0 } as DetailPayload}
++      onClose={() => {}} onFocus={() => {}} onOpen={() => {}} onSearch={onSearch} />);
++    fireEvent.click(screen.getByRole("button", { name: "View runs in search" }));
++    expect(onSearch).toHaveBeenCalledWith("/search?q=SAMEA1");
++  });
++
++  it("falls back to em dash for missing values", () => {
++    render(<Inspector node={{ id: "sample:SAMEA1", type: "sample", label: "SAMEA1" }}
++      detail={null}
++      onClose={() => {}} onFocus={() => {}} onOpen={() => {}} onSearch={() => {}} />);
++    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
++  });
++});
+diff --git a/components/graph/Inspector.tsx b/components/graph/Inspector.tsx
+new file mode 100644
+index 0000000..c5e2ae3
+--- /dev/null
++++ b/components/graph/Inspector.tsx
+@@ -0,0 +1,225 @@
++"use client";
++
++import { NODE_COLORS, type DetailPayload, type GraphNode } from "./graph-layout";
++
++export default function Inspector({ node, detail, onClose, onFocus, onOpen, onSearch }: {
++  node: GraphNode;
++  detail: DetailPayload | null;
++  onClose: () => void;
++  onFocus: (id: string) => void;
++  onOpen: (link: string) => void;
++  onSearch: (href: string) => void;
++}) {
++  const d: Record<string, unknown> = detail ?? {};
++  const href = searchHref(node);
++
++  return (
++    <aside className="card w-full shrink-0 p-0 xl:w-80" aria-label="Node inspector">
++      <header className="flex items-start gap-2 border-b p-3"
++        style={{ borderColor: "var(--border)" }}>
++        <div className="min-w-0 flex-1">
++          <div className="break-words font-semibold">{node.label}</div>
++          <span className="badge mt-1 inline-flex items-center gap-1">
++            <span className="inline-block h-2 w-2 rounded-full"
++              style={{ background: NODE_COLORS[node.type] }} />
++            {node.type}
++          </span>
++        </div>
++        <button className="btn shrink-0 px-2 py-1" aria-label="Close" onClick={onClose}>✕</button>
++      </header>
++
++      <div className="space-y-1.5 p-3 text-sm">
++        {detail === null && <p className="text-dim">Loading detail…</p>}
++        <Fields node={node} d={d} />
++      </div>
++
++      <footer className="flex flex-wrap gap-2 border-t p-3"
++        style={{ borderColor: "var(--border)" }}>
++        <button className="btn btn-accent" onClick={() => onFocus(node.id)}>Focus graph</button>
++        <button className="btn" disabled={!node.link}
++          onClick={() => node.link && onOpen(node.link)}>
++          Open page
++        </button>
++        {href && <button className="btn" onClick={() => onSearch(href)}>View runs in search</button>}
++      </footer>
++    </aside>
++  );
++}
++
++// "View runs in search" target per node type; term/taxon have no search facet.
++function searchHref(node: GraphNode): string | null {
++  const id = encodeURIComponent(node.id.slice(node.type.length + 1));
++  switch (node.type) {
++    case "sample": return `/search?q=${id}`;
++    case "organism": return `/search?organism=${id}`;
++    case "submitter": return `/search?submitter=${id}`;
++    case "region": return `/search?region=${id}`;
++    case "platform": return `/search?platform=${id}`;
++    case "strategy": return `/search?strategy=${id}`;
++    case "study": return `/search?study=${id}`;
++    default: return null;
++  }
++}
++
++// ---- defensive readers: the endpoint's type-specific keys arrive as unknown ----
++
++const txt = (v: unknown): string => (typeof v === "string" && v ? v : "—");
++const int = (v: unknown): number | null => (typeof v === "number" ? v : null);
++const dash = (v: unknown): string => {
++  const n = int(v);
++  return n === null ? "—" : n.toLocaleString();
++};
++const runs = (v: unknown): string => {
++  const n = int(v);
++  return n === null ? "—" : `${n.toLocaleString()} runs`;
++};
++const range = (a: unknown, b: unknown): string => {
++  const x = txt(a), y = txt(b);
++  if (x === "—" && y === "—") return "—";
++  return x === y ? x : `${x} → ${y}`;
++};
++
++function bytes(v: unknown): string {
++  let n = typeof v === "number" ? v : Number(v);
++  if (!Number.isFinite(n)) return "—";
++  if (n < 1024) return `${n} B`;
++  const units = ["KB", "MB", "GB", "TB"];
++  let i = -1;
++  do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
++  return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
++}
++
++function lineageText(v: unknown): string {
++  if (!v || typeof v !== "object") return "—";
++  const l = v as Record<string, unknown>;
++  const parts = [l.genus, l.family, l.phylum]
++    .filter((x): x is string => typeof x === "string" && !!x);
++  return parts.length ? parts.join(" › ") : "—";
++}
++
++interface TopItem { name?: unknown; accession?: unknown; runs?: unknown }
++
++// name (runs) rows for top_organisms / top_studies; the parenthesized count
++// keeps "N runs" reserved for the stats rows.
++function TopList({ items, labelKey }: { items: unknown; labelKey: "name" | "accession" }) {
++  if (!Array.isArray(items) || items.length === 0) {
++    return <Row label={labelKey === "name" ? "Top organisms" : "Top studies"} value="—" />;
++  }
++  return (
++    <div>
++      <div className="text-dim">{labelKey === "name" ? "Top organisms" : "Top studies"}</div>
++      <ul className="mt-0.5 space-y-0.5">
++        {(items as TopItem[]).map((it, i) => (
++          <li key={i} className="flex items-baseline justify-between gap-2">
++            <span className="break-all">{txt(it[labelKey])}</span>
++            <span className="text-dim shrink-0">({dash(it.runs)})</span>
++          </li>
++        ))}
++      </ul>
++    </div>
++  );
++}
++
++function Chips({ items, label }: { items: unknown; label: string }) {
++  if (!Array.isArray(items) || items.length === 0) return <Row label={label} value="—" />;
++  return (
++    <div>
++      <div className="text-dim">{label}</div>
++      <div className="mt-0.5 flex flex-wrap gap-1">
++        {items.map((p, i) => (
++          <span key={i} className="badge">{txt(p)}</span>
++        ))}
++      </div>
++    </div>
++  );
++}
++
++function Row({ label, value }: { label: string; value: string }) {
++  return (
++    <div className="flex items-baseline justify-between gap-2">
++      <span className="text-dim shrink-0">{label}</span>
++      <span className="text-right break-words">{value}</span>
++    </div>
++  );
++}
++
++// ---- per-type field lists (keys mirror the Task 2 detail endpoint) ----
++
++function Fields({ node, d }: { node: GraphNode; d: Record<string, unknown> }) {
++  switch (node.type) {
++    case "study":
++      return (
++        <>
++          <Row label="Title" value={txt(d.title)} />
++          <Row label="Submitter" value={txt(d.submitter)} />
++          <Row label="Dates" value={range(d.date_min, d.date_max)} />
++          <Row label="Samples" value={dash(d.samples)} />
++          <Row label="Runs" value={runs(d.runs)} />
++          <Row label="Bytes" value={bytes(d.bytes)} />
++          {typeof d.abstract === "string" && d.abstract && (
++            <p className="pt-1 text-[var(--text-dim)]">{d.abstract}</p>
++          )}
++          <TopList items={d.top_organisms} labelKey="name" />
++          <Chips items={d.platforms} label="Platforms" />
++        </>
++      );
++    case "sample":
++      return (
++        <>
++          <Row label="Organism" value={txt(d.organism)} />
++          <Row label="Lineage" value={lineageText(d.lineage)} />
++          <Row label="Host" value={txt(d.host)} />
++          <Row label="Tissue" value={txt(d.tissue)} />
++          <Row label="Region" value={txt(d.region)} />
++          <Row label="Collected" value={txt(d.collection_date)} />
++          <Row label="Runs" value={runs(d.runs)} />
++          <Row label="Bytes" value={bytes(d.bytes)} />
++          <Row label="Study" value={txt(d.study)} />
++        </>
++      );
++    case "organism":
++      return (
++        <>
++          <Row label="Lineage" value={lineageText(d.lineage)} />
++          <Row label="Human class" value={txt(d.human_class)} />
++          <Row label="Studies" value={dash(d.studies)} />
++          <Row label="Runs" value={runs(d.runs)} />
++        </>
++      );
++    case "submitter":
++      return (
++        <>
++          <Row label="Studies" value={dash(d.studies)} />
++          <Row label="Runs" value={runs(d.runs)} />
++          <TopList items={d.top_organisms} labelKey="name" />
++        </>
++      );
++    case "platform": case "strategy": case "region":
++      return (
++        <>
++          <Row label="Runs" value={runs(d.runs)} />
++          <TopList items={d.top_studies} labelKey="accession" />
++        </>
++      );
++    case "term":
++      return (
++        <>
++          <Row label="Label" value={txt(d.label)} />
++          <Row label="Runs" value={runs(d.runs)} />
++          <Row label="Samples" value={dash(d.samples)} />
++          <TopList items={d.top_studies} labelKey="accession" />
++        </>
++      );
++    case "taxon":
++      return (
++        <>
++          <Row label="Rank" value={txt(d.rank)} />
++          <Row label="Name" value={txt(d.name)} />
++          <Row label="Organisms" value={dash(d.organisms)} />
++          <Row label="Runs" value={runs(d.runs)} />
++        </>
++      );
++    default:
++      return <Row label="Type" value={node.type} />;
++  }
++}
+diff --git a/components/graph/graph-layout.ts b/components/graph/graph-layout.ts
+index 01eed4d..39341f3 100644
+--- a/components/graph/graph-layout.ts
++++ b/components/graph/graph-layout.ts
+@@ -1,17 +1,25 @@
+ export type NodeType = "submitter" | "study" | "sample" | "organism" | "taxon"
+   | "platform" | "strategy" | "region" | "publication" | "term";
+ export type HumanClass = "human" | "human_associated" | "other";
++// Mirrors the facets/recent fields Task 1 added to the graph API response.
++export interface NodeFacets {
++  domain?: HumanClass; region?: string; platforms?: string[]; years?: [number, number];
++}
+ export interface GraphNode {
+   id: string; type: NodeType; label: string; count?: number;
+-  human_class?: HumanClass; link?: string | null;
++  human_class?: HumanClass; facets?: NodeFacets; recent?: boolean;
++  link?: string | null;
+ }
++// Task 2 detail payload: type-specific keys plus the node type. Renderers
++// read fields defensively (`?? "—"`), so unknown values are fine.
++export type DetailPayload = Record<string, unknown> & { type: NodeType };
+ export interface GraphEdge { source: string; target: string; kind: string; count?: number }
+ export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[] }
+ 
+ // Theme-independent hues per node type. These hexes are intentional
+ // exceptions to the CSS-variable rule: SVG canvas colors can't follow
+ // `data-theme` without re-running the simulation/re-render.
+ export const NODE_COLORS: Record<NodeType, string> = {
+   submitter: "#6366f1", study: "#2563eb", sample: "#0ea5e9",
+   organism: "#2dd4bf", taxon: "#14b8a6", platform: "#a855f7",
+   strategy: "#c084fc", region: "#84cc16", publication: "#64748b", term: "#f97316",

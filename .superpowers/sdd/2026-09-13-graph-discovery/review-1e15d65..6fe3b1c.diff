@@ -1,0 +1,208 @@
+# Review package: 1e15d65..HEAD
+
+## Commits
+6fe3b1c fix(graph): exclude region from facet dimming, cap platform chips
+
+## Files changed
+ components/graph/FacetRail.tsx        |  4 +++-
+ components/graph/GraphHub.tsx         |  9 +++++----
+ components/graph/graph-layout.test.ts | 11 +++++++++++
+ components/graph/graph-layout.ts      | 19 ++++++++++++++-----
+ 4 files changed, 33 insertions(+), 10 deletions(-)
+
+## Diff
+diff --git a/components/graph/FacetRail.tsx b/components/graph/FacetRail.tsx
+index db11b26..5a76de4 100644
+--- a/components/graph/FacetRail.tsx
++++ b/components/graph/FacetRail.tsx
+@@ -5,21 +5,23 @@ import { HUMAN_COLORS, type ActiveFacets, type GraphNode, type HumanClass } from
+ export interface FacetValue { value: string; count: number }
+ export interface FacetGroups {
+   domain: FacetValue[];
+   region: FacetValue[];
+   platform: FacetValue[];
+   years: number[];
+ }
+ 
+ const headingCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]";
+ // The rail is a compact sidebar; cap the long tail so it stays scannable.
+-const MAX_CHIPS = 12;
++// Exported because GraphHub applies the same cap to the endpoint-derived
++// platform group.
++export const MAX_CHIPS = 12;
+ 
+ // Client-side groups from the loaded graph nodes: domain counts come from
+ // node facets, regions from the region-type nodes in view, years expanded
+ // from each node's years range. (The /v2/search/facets endpoint has no
+ // region or year key — platform comes from there, see GraphHub.)
+ export function groupsFromNodes(nodes: GraphNode[]): Pick<FacetGroups, "domain" | "region" | "years"> {
+   const domainCounts = new Map<string, number>();
+   const years = new Set<number>();
+   for (const n of nodes) {
+     if (n.facets?.domain) {
+diff --git a/components/graph/GraphHub.tsx b/components/graph/GraphHub.tsx
+index 4d2f093..64d1761 100644
+--- a/components/graph/GraphHub.tsx
++++ b/components/graph/GraphHub.tsx
+@@ -2,21 +2,21 @@
+ 
+ import { useRouter } from "next/navigation";
+ import { useEffect, useMemo, useState } from "react";
+ 
+ import type { V2FacetsResponse } from "@/lib/api";
+ import { useQuery } from "@/lib/useQuery";
+ import {
+   HUMAN_COLORS, NODE_COLORS,
+   type ActiveFacets, type DetailPayload, type GraphData, type GraphNode, type HumanClass, type NodeType,
+ } from "./graph-layout";
+-import FacetRail, { groupsFromNodes } from "./FacetRail";
++import FacetRail, { groupsFromNodes, MAX_CHIPS } from "./FacetRail";
+ import GraphCanvas from "./GraphCanvas";
+ import Inspector from "./Inspector";
+ 
+ type Filter = "all" | HumanClass;
+ 
+ const NODE_TYPES: NodeType[] = [
+   "submitter", "study", "sample", "organism", "taxon",
+   "platform", "strategy", "region", "publication", "term",
+ ];
+ const HUMAN_CLASSES: HumanClass[] = ["human", "human_associated", "other"];
+@@ -30,22 +30,23 @@ export default function GraphHub({ focus }: { focus: string | null }) {
+   const [data, setData] = useState<GraphData | null>(null);
+   const [loading, setLoading] = useState(true);
+   const [error, setError] = useState<string | null>(null);
+   const [filter, setFilter] = useState<Filter>("all");
+   const [active, setActive] = useState<ActiveFacets>({});
+   const [selected, setSelected] = useState<GraphNode | null>(null);
+   const [detail, setDetail] = useState<DetailPayload | null>(null);
+   const [detailError, setDetailError] = useState<string | null>(null);
+ 
+   // Facet options: platforms from the shared /v2/search/facets endpoint
+-  // (Saudi-scoped, cached); domain/region/years derived from the loaded
+-  // graph nodes themselves (see groupsFromNodes).
++  // (Saudi-scoped, cached), capped at MAX_CHIPS like the other groups;
++  // domain/region/years derived from the loaded graph nodes themselves
++  // (see groupsFromNodes).
+   const facetsRes = useQuery<V2FacetsResponse>("/v2/search/facets");
+ 
+   useEffect(() => {
+     let cancelled = false;
+     setLoading(true);
+     setError(null);
+     const url = `/api/v2/graph${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`;
+     fetch(url, { cache: "no-store" })
+       .then(async (res) => {
+         if (!res.ok) throw new Error(`API /v2/graph -> ${res.status}`);
+@@ -109,21 +110,21 @@ export default function GraphHub({ focus }: { focus: string | null }) {
+   };
+ 
+   const onClose = () => {
+     setSelected(null);
+     setDetail(null);
+     setDetailError(null);
+   };
+ 
+   const groups = useMemo(() => ({
+     ...groupsFromNodes(data?.nodes ?? []),
+-    platform: (facetsRes.data?.platforms ?? []).map((p) => ({ value: p.name, count: p.runs })),
++    platform: (facetsRes.data?.platforms ?? []).map((p) => ({ value: p.name, count: p.runs })).slice(0, MAX_CHIPS),
+   }), [data, facetsRes.data]);
+ 
+   return (
+     <div className="space-y-4">
+       <div className="flex items-center gap-4">
+         <div>
+           <h1 className="text-2xl font-bold">Knowledge graph</h1>
+           {focus && <p className="text-sm text-[var(--text-dim)]">{focus}</p>}
+         </div>
+         {focus && (
+diff --git a/components/graph/graph-layout.test.ts b/components/graph/graph-layout.test.ts
+index d09d8dd..7224f3c 100644
+--- a/components/graph/graph-layout.test.ts
++++ b/components/graph/graph-layout.test.ts
+@@ -20,20 +20,31 @@ describe("facetMatch", () => {
+     expect(facetMatch(f, { domain: "human", region: "Riyadh", platform: "ILLUMINA", year: 2022 })).toBe(true);
+   });
+   it("fails on any mismatch and on missing facet info", () => {
+     expect(facetMatch(f, { domain: "other" })).toBe(false);
+     expect(facetMatch(f, { year: 1999 })).toBe(false);
+     expect(facetMatch(undefined, { platform: "ILLUMINA" })).toBe(false);
+   });
+   it("empty active facets passes everything", () => {
+     expect(facetMatch(undefined, {})).toBe(true);
+   });
++  it("region selection dims nothing (facets.region is never populated)", () => {
++    // Region chips derive from region-type node labels, but scopeFacets never
++    // sets node.facets.region, so no node can be evaluated against a region:
++    // even a diverging region and facet-less nodes pass, and other facets
++    // combined with a region still dim as before.
++    expect(facetMatch(f, { region: "Riyadh" })).toBe(true);
++    expect(facetMatch(f, { region: "Jeddah" })).toBe(true);
++    expect(facetMatch(undefined, { region: "Riyadh" })).toBe(true);
++    expect(facetMatch(f, { region: "Riyadh", platform: "ILLUMINA" })).toBe(true);
++    expect(facetMatch(f, { region: "Riyadh", platform: "OXFORD_NANOPORE" })).toBe(false);
++  });
+ });
+ 
+ describe("neighborIds", () => {
+   it("returns self plus direct neighbors", () => {
+     expect(neighborIds(edges, "sample:S1")).toEqual(new Set(["sample:S1", "study:A", "organism:O1"]));
+   });
+   it("returns only self for isolated or unknown node", () => {
+     expect(neighborIds(edges, "term:T1")).toEqual(new Set(["term:T1"]));
+   });
+ });
+diff --git a/components/graph/graph-layout.ts b/components/graph/graph-layout.ts
+index 9a30b74..d482c75 100644
+--- a/components/graph/graph-layout.ts
++++ b/components/graph/graph-layout.ts
+@@ -33,35 +33,44 @@ export const HUMAN_COLORS: Record<HumanClass, string> = {
+ 
+ export function isDimmed(
+   n: Pick<GraphNode, "type" | "human_class">,
+   filter: "all" | HumanClass
+ ): boolean {
+   if (filter === "all") return false;
+   if (n.type !== "organism" && n.type !== "sample" && n.type !== "taxon") return false;
+   return n.human_class !== filter;
+ }
+ 
+-// ---- facet rail dimming: every set facet ANDed against the node's facets ----
++// ---- facet rail dimming: set facets ANDed against the node's facets ----
+ 
+ export interface ActiveFacets { domain?: string; region?: string; platform?: string; year?: number }
+ 
+ // True when the node passes every set facet. Nodes without facet info fail
+-// as soon as any facet is active; platforms match by intersection; a node's
+-// years range must include the active year.
++// as soon as any evaluable facet is active; platforms match by intersection;
++// a node's years range must include the active year.
++//
++// Region is deliberately NOT evaluated: scopeFacets (functions/api/v2/graph.ts)
++// never populates node.facets.region — only years/platforms/domain — so a
++// region selection can never match any node, and failing here dimmed the whole
++// canvas (0.15), including the region node itself, on any region chip click.
++// The rail's region chips (derived from region-type node labels, see
++// FacetRail) only feed the /search?region= deep-link, so a region-only
++// selection passes every node and dims nothing.
+ export function facetMatch(
+   f: GraphNode["facets"] | undefined,
+   active: ActiveFacets
+ ): boolean {
+-  if (Object.values(active).every((v) => v === undefined)) return true;
++  if (active.domain === undefined && active.platform === undefined && active.year === undefined) {
++    return true;
++  }
+   if (!f) return false;
+   if (active.domain !== undefined && f.domain !== active.domain) return false;
+-  if (active.region !== undefined && f.region !== active.region) return false;
+   if (active.platform !== undefined && !(f.platforms ?? []).includes(active.platform)) return false;
+   if (active.year !== undefined) {
+     const [y0, y1] = f.years ?? [];
+     if (y0 === undefined || y1 === undefined) return false;
+     if (active.year < y0 || active.year > y1) return false;
+   }
+   return true;
+ }
+ 
+ export const ZOOM_LABEL_THRESHOLD = 1.5;

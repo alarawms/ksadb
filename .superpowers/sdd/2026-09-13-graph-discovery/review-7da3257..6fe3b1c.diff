@@ -1,0 +1,2082 @@
+# Review package: 7da3257..HEAD
+
+## Commits
+6fe3b1c fix(graph): exclude region from facet dimming, cap platform chips
+1e15d65 feat(graph): facet rail with canvas dimming and search deep-link
+decc84a feat(graph): inspector panel with click-to-select, focus on double-click, recency rings
+c78d682 feat(graph): /api/v2/graph/detail inspector payload endpoint
+791a3e1 feat(graph): node facets (domain/platforms/years/recent), taxon focus + lineage, study search filter
+
+## Files changed
+ components/graph/FacetRail.test.tsx   |  65 +++++++++
+ components/graph/FacetRail.tsx        | 116 ++++++++++++++++
+ components/graph/GraphCanvas.test.tsx |  58 ++++++--
+ components/graph/GraphCanvas.tsx      |  39 ++++--
+ components/graph/GraphHub.tsx         |  90 ++++++++++++-
+ components/graph/Inspector.test.tsx   |  68 ++++++++++
+ components/graph/Inspector.tsx        | 225 +++++++++++++++++++++++++++++++
+ components/graph/graph-layout.test.ts |  30 ++++-
+ components/graph/graph-layout.ts      |  43 +++++-
+ functions/api/v2/_lib/filters.ts      |   1 +
+ functions/api/v2/filters.test.ts      |   7 +
+ functions/api/v2/graph.test.ts        |  28 ++++
+ functions/api/v2/graph.ts             | 159 +++++++++++++++++++++-
+ functions/api/v2/graph/detail.test.ts | 182 ++++++++++++++++++++++++++
+ functions/api/v2/graph/detail.ts      | 240 ++++++++++++++++++++++++++++++++++
+ 15 files changed, 1323 insertions(+), 28 deletions(-)
+
+## Diff
+diff --git a/components/graph/FacetRail.test.tsx b/components/graph/FacetRail.test.tsx
+new file mode 100644
+index 0000000..acc5be3
+--- /dev/null
++++ b/components/graph/FacetRail.test.tsx
+@@ -0,0 +1,65 @@
++// @vitest-environment happy-dom
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import FacetRail, { type FacetGroups } from "./FacetRail";
++
++afterEach(cleanup);
++
++const GROUPS: FacetGroups = {
++  domain: [{ value: "human", count: 3 }, { value: "other", count: 2 }],
++  region: [{ value: "Riyadh", count: 120 }, { value: "Jeddah", count: 40 }],
++  platform: [{ value: "ILLUMINA", count: 9000 }, { value: "OXFORD_NANOPORE", count: 300 }],
++  years: [2024, 2023],
++};
++
++describe("FacetRail", () => {
++  it("renders chips for every group", () => {
++    render(<FacetRail facets={GROUPS} active={{}} onChange={() => {}} />);
++    expect(screen.getByRole("button", { name: /human \(3\)/ })).toBeTruthy();
++    expect(screen.getByRole("button", { name: /Riyadh \(120\)/ })).toBeTruthy();
++    expect(screen.getByRole("button", { name: /ILLUMINA \(9,000\)/ })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "2024" })).toBeTruthy();
++  });
++
++  it("clicking a chip calls onChange with the facet set", () => {
++    const onChange = vi.fn();
++    render(<FacetRail facets={GROUPS} active={{}} onChange={onChange} />);
++    fireEvent.click(screen.getByRole("button", { name: /human \(3\)/ }));
++    expect(onChange).toHaveBeenCalledWith({ domain: "human" });
++    fireEvent.click(screen.getByRole("button", { name: "2023" }));
++    expect(onChange).toHaveBeenCalledWith({ year: 2023 });
++  });
++
++  it("clicking an active chip calls onChange with it cleared", () => {
++    const onChange = vi.fn();
++    render(<FacetRail facets={GROUPS} active={{ domain: "human" }} onChange={onChange} />);
++    fireEvent.click(screen.getByRole("button", { name: /human \(3\)/ }));
++    expect(onChange).toHaveBeenCalledWith({});
++  });
++
++  it("active chip has the badge-accent class", () => {
++    render(<FacetRail facets={GROUPS} active={{ platform: "ILLUMINA" }} onChange={() => {}} />);
++    const chip = screen.getByRole("button", { name: /ILLUMINA \(9,000\)/ });
++    expect(chip.className).toContain("badge-accent");
++    expect(screen.getByRole("button", { name: /OXFORD_NANOPORE \(300\)/ }).className)
++      .not.toContain("badge-accent");
++  });
++
++  it("links to /search with the equivalent params when a facet is active", () => {
++    render(<FacetRail facets={GROUPS}
++      active={{ region: "Riyadh", platform: "ILLUMINA", year: 2023 }}
++      onChange={() => {}} />);
++    const link = screen.getByRole("link", { name: /matching runs/ }) as HTMLAnchorElement;
++    expect(link.pathname).toBe("/search");
++    const qs = new URLSearchParams(link.search);
++    expect(qs.get("region")).toBe("Riyadh");
++    expect(qs.get("platform")).toBe("ILLUMINA");
++    expect(qs.get("from")).toBe("2023-01-01");
++    expect(qs.get("to")).toBe("2023-12-31");
++  });
++
++  it("hides the search link when nothing is active", () => {
++    render(<FacetRail facets={GROUPS} active={{}} onChange={() => {}} />);
++    expect(screen.queryByRole("link", { name: /matching runs/ })).toBeNull();
++  });
++});
+diff --git a/components/graph/FacetRail.tsx b/components/graph/FacetRail.tsx
+new file mode 100644
+index 0000000..5a76de4
+--- /dev/null
++++ b/components/graph/FacetRail.tsx
+@@ -0,0 +1,116 @@
++"use client";
++
++import { HUMAN_COLORS, type ActiveFacets, type GraphNode, type HumanClass } from "./graph-layout";
++
++export interface FacetValue { value: string; count: number }
++export interface FacetGroups {
++  domain: FacetValue[];
++  region: FacetValue[];
++  platform: FacetValue[];
++  years: number[];
++}
++
++const headingCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]";
++// The rail is a compact sidebar; cap the long tail so it stays scannable.
++// Exported because GraphHub applies the same cap to the endpoint-derived
++// platform group.
++export const MAX_CHIPS = 12;
++
++// Client-side groups from the loaded graph nodes: domain counts come from
++// node facets, regions from the region-type nodes in view, years expanded
++// from each node's years range. (The /v2/search/facets endpoint has no
++// region or year key — platform comes from there, see GraphHub.)
++export function groupsFromNodes(nodes: GraphNode[]): Pick<FacetGroups, "domain" | "region" | "years"> {
++  const domainCounts = new Map<string, number>();
++  const years = new Set<number>();
++  for (const n of nodes) {
++    if (n.facets?.domain) {
++      domainCounts.set(n.facets.domain, (domainCounts.get(n.facets.domain) ?? 0) + 1);
++    }
++    const [y0, y1] = n.facets?.years ?? [];
++    if (y0 !== undefined && y1 !== undefined) {
++      for (let y = y0; y <= y1; y++) years.add(y);
++    }
++  }
++  const domain = (["human", "human_associated", "other"] as HumanClass[])
++    .filter((d) => domainCounts.has(d))
++    .map((d) => ({ value: d, count: domainCounts.get(d)! }));
++  const region = nodes
++    .filter((n) => n.type === "region")
++    .map((n) => ({ value: n.label, count: n.count ?? 0 }))
++    .sort((a, b) => b.count - a.count)
++    .slice(0, MAX_CHIPS);
++  return { domain, region, years: [...years].sort((a, b) => b - a).slice(0, MAX_CHIPS) };
++}
++
++// Deep-link params mirror functions/api/v2/_lib/filters.ts (parseV2Filters):
++// region/platform map 1:1, a single year becomes a from/to submitted-date
++// range. Domain is a graph-only classification with no search-v2 param.
++function searchHref(active: ActiveFacets): string | null {
++  const qs = new URLSearchParams();
++  if (active.region) qs.set("region", active.region);
++  if (active.platform) qs.set("platform", active.platform);
++  if (active.year) {
++    qs.set("from", `${active.year}-01-01`);
++    qs.set("to", `${active.year}-12-31`);
++  }
++  const s = qs.toString();
++  return s ? `/search?${s}` : null;
++}
++
++export default function FacetRail({ facets, active, onChange }: {
++  facets: FacetGroups;
++  active: ActiveFacets;
++  onChange: (f: ActiveFacets) => void;
++}) {
++  // Toggle semantics: clicking a set chip clears it. `delete` (not undefined)
++  // keeps the object free of unset keys, so Object.keys(active) counts only
++  // real facets (GraphCanvas dims on that length).
++  const toggle = (key: keyof ActiveFacets, value: string | number) => {
++    const next: ActiveFacets = { ...active };
++    if (next[key] === value) delete next[key];
++    else (next as Record<string, string | number>)[key] = value;
++    onChange(next);
++  };
++
++  const groups: { key: keyof ActiveFacets; label: string; values: (FacetValue | number)[] }[] = [
++    { key: "domain", label: "Domain", values: facets.domain },
++    { key: "region", label: "Region", values: facets.region },
++    { key: "platform", label: "Platform", values: facets.platform },
++    { key: "year", label: "Year", values: facets.years },
++  ];
++  const href = searchHref(active);
++
++  return (
++    <aside className="card w-full shrink-0 p-3 xl:w-56" aria-label="Facet rail">
++      <div className="space-y-3">
++        {groups.filter((g) => g.values.length > 0).map((g) => (
++          <div key={g.key}>
++            <span className={headingCls}>{g.label}</span>
++            <div className="flex flex-wrap gap-1">
++              {g.values.map((v) => {
++                const value = typeof v === "number" ? v : v.value;
++                const label = typeof v === "number" ? String(v) : `${v.value} (${v.count.toLocaleString()})`;
++                const color = g.key === "domain" ? HUMAN_COLORS[value as HumanClass] : undefined;
++                return (
++                  <button key={label}
++                    className={`badge ${active[g.key] === value ? "badge-accent" : ""}`}
++                    onClick={() => toggle(g.key, value)}>
++                    {color && (
++                      <span className="mr-1 inline-block h-2.5 w-2.5 rounded-full align-middle"
++                        style={{ background: color }} />
++                    )}
++                    {label}
++                  </button>
++                );
++              })}
++            </div>
++          </div>
++        ))}
++      </div>
++      {href && (
++        <a className="btn mt-3" href={href}>matching runs →</a>
++      )}
++    </aside>
++  );
++}
+diff --git a/components/graph/GraphCanvas.test.tsx b/components/graph/GraphCanvas.test.tsx
+index a127711..1e0624b 100644
+--- a/components/graph/GraphCanvas.test.tsx
++++ b/components/graph/GraphCanvas.test.tsx
+@@ -2,35 +2,39 @@
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+ import GraphCanvas from "./GraphCanvas";
+ import type { GraphData } from "./graph-layout";
+ 
+ afterEach(cleanup);
+ 
+ const fixture: GraphData = {
+   nodes: [
+     { id: "study-1", type: "study", label: "Study Alpha", count: 12, link: "/study/1" },
+-    { id: "sample-1", type: "sample", label: "Sample Beta", count: 3 },
++    { id: "sample-1", type: "sample", label: "Sample Beta", count: 3, recent: true },
+   ],
+   edges: [
+     { source: "study-1", target: "sample-1", kind: "has_sample", count: 3 },
+   ],
+ };
+ 
+-async function renderCanvas() {
+-  const onNodeClick = vi.fn();
+-  const utils = render(<GraphCanvas data={fixture} filter="all" onNodeClick={onNodeClick} />);
++async function renderCanvas(extra?: { onBackgroundClick?: () => void }) {
++  const onNodeSelect = vi.fn();
++  const onNodeFocus = vi.fn();
++  const utils = render(
++    <GraphCanvas data={fixture} filter="all" onNodeSelect={onNodeSelect} onNodeFocus={onNodeFocus}
++      {...(extra ?? {})} />
++  );
+   // Nodes enter the DOM only after the simulation's first tick.
+   await waitFor(() => {
+     expect(utils.container.querySelectorAll("g.graph-node").length).toBe(2);
+   });
+-  return { onNodeClick, ...utils };
++  return { onNodeSelect, onNodeFocus, ...utils };
+ }
+ 
+ describe("GraphCanvas", () => {
+   it("renders nodes and edges from the fixture graph", async () => {
+     const { container } = await renderCanvas();
+     expect(container.querySelectorAll("g.graph-node").length).toBe(2);
+     expect(container.querySelectorAll("line").length).toBe(1);
+   });
+ 
+   it("search input filters and shows matches", async () => {
+@@ -51,53 +55,89 @@ describe("GraphCanvas", () => {
+     fireEvent.change(input, { target: { value: "beta" } });
+     await screen.findByRole("button", { name: /Sample Beta/ });
+     fireEvent.keyDown(input, { key: "Escape" });
+     expect(input.value).toBe("");
+   });
+ 
+   it("shows tooltip content on node hover", async () => {
+     await renderCanvas();
+     const node = document.querySelector("g.graph-node") as SVGGElement;
+     fireEvent.mouseEnter(node);
+-    expect(await screen.findByText("click to open")).toBeTruthy();
++    expect(await screen.findByText("click for details · double-click to focus")).toBeTruthy();
+     expect(screen.getAllByText("Study Alpha").length).toBeGreaterThan(0);
+     fireEvent.mouseLeave(node);
+-    await waitFor(() => expect(screen.queryByText("click to open")).toBeNull());
++    await waitFor(() => expect(screen.queryByText("click for details · double-click to focus")).toBeNull());
+   });
+ 
+   it("zoom control buttons mutate the <g> transform", async () => {
+     const { container } = await renderCanvas();
+     const g = container.querySelector("svg > g") as SVGGElement;
+     const before = g.getAttribute("transform");
+     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+     await waitFor(() => {
+       expect(g.getAttribute("transform")).not.toBe(before);
+     });
+     expect(screen.getByRole("button", { name: "Zoom out" })).toBeTruthy();
+     expect(screen.getByRole("button", { name: "Fit" })).toBeTruthy();
+   });
+ 
+   it("mouse drag on a node does not throw and does not swallow clicks", async () => {
+     const errors: Error[] = [];
+     window.addEventListener("error", (e) => errors.push(e.error as Error));
+-    const { container, onNodeClick } = await renderCanvas();
++    const { container, onNodeSelect } = await renderCanvas();
+     const node = container.querySelector("g.graph-node") as SVGGElement;
+     // happy-dom's SVGPoint lacks matrixTransform, which d3-selection's pointer
+     // math needs; stub the svg geometry so d3-drag can compute a position.
+     const svg = container.querySelector("svg") as SVGSVGElement;
+     svg.createSVGPoint = () =>
+       ({ x: 0, y: 0, matrixTransform: () => ({ x: 0, y: 0 }) }) as unknown as DOMPoint;
+     svg.getScreenCTM = () => ({ inverse: () => ({}) }) as unknown as DOMMatrix;
+     // Regression pin for the d3 datum join: without __data__ on the <g>, the
+     // drag start handler throws on d.fx and the end handler's setTimeout never
+     // resets draggedRef, permanently swallowing node clicks.
+     fireEvent.mouseDown(node, { button: 0, clientX: 10, clientY: 10, view: window });
+     fireEvent.mouseMove(window, { clientX: 30, clientY: 30 });
+     fireEvent.mouseUp(window, { view: window });
+     expect(errors).toEqual([]);
+     // draggedRef resets in the drag-end handler's setTimeout(0); in a real
+     // browser mouseup and click are separate tasks, so yield a macrotask.
+     await new Promise((r) => setTimeout(r, 0));
+     fireEvent.click(node);
+-    expect(onNodeClick).toHaveBeenCalledTimes(1);
++    expect(onNodeSelect).toHaveBeenCalledTimes(1);
++  });
++
++  it("single click selects, double click focuses", async () => {
++    const select = vi.fn();
++    const focus = vi.fn();
++    const { container } = render(
++      <GraphCanvas data={fixture} filter="all" onNodeSelect={select} onNodeFocus={focus} />);
++    // Labels render only on hover/zoom, so target the node <g> directly;
++    // fixture order guarantees the first node is "Study Alpha".
++    await waitFor(() => {
++      expect(container.querySelectorAll("g.graph-node").length).toBe(2);
++    });
++    const nodeEl = container.querySelector("g.graph-node")!;
++    fireEvent.click(nodeEl);
++    expect(select).toHaveBeenCalledTimes(1);
++    expect(focus).not.toHaveBeenCalled();
++    fireEvent.doubleClick(nodeEl);
++    expect(focus).toHaveBeenCalledTimes(1);
++  });
++
++  it("draws a recency ring under nodes flagged recent", async () => {
++    const { container } = await renderCanvas();
++    // "Sample Beta" is the fixture's recent node; its ring is an extra circle
++    // inside the same <g>, so the recent node has one more circle than the other.
++    const groups = Array.from(container.querySelectorAll("g.graph-node"));
++    const counts = groups.map((g) => g.querySelectorAll("circle").length).sort();
++    expect(counts).toEqual([1, 2]);
++  });
++
++  it("background click calls onBackgroundClick", async () => {
++    const onBackgroundClick = vi.fn();
++    const { container } = await renderCanvas({ onBackgroundClick });
++    const rect = container.querySelector("svg > g > rect");
++    expect(rect).toBeTruthy();
++    fireEvent.click(rect!);
++    expect(onBackgroundClick).toHaveBeenCalledTimes(1);
+   });
+ });
+diff --git a/components/graph/GraphCanvas.tsx b/components/graph/GraphCanvas.tsx
+index 5811194..d258c4d 100644
+--- a/components/graph/GraphCanvas.tsx
++++ b/components/graph/GraphCanvas.tsx
+@@ -4,37 +4,40 @@ import { useEffect, useRef, useState } from "react";
+ import { drag, type D3DragEvent } from "d3-drag";
+ import { select } from "d3-selection";
+ import "d3-transition";
+ import { zoom as d3zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior } from "d3-zoom";
+ import {
+   forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation,
+   type SimulationNodeDatum,
+ } from "d3-force";
+ 
+ import {
+-  filterNodes, HUMAN_COLORS, isDimmed, neighborIds, NODE_COLORS, visibleLabelIds, ZOOM_EXTENT,
+-  type GraphData, type GraphEdge, type GraphNode, type HumanClass,
++  facetMatch, filterNodes, HUMAN_COLORS, isDimmed, neighborIds, NODE_COLORS, visibleLabelIds, ZOOM_EXTENT,
++  type ActiveFacets, type GraphData, type GraphEdge, type GraphNode, type HumanClass,
+ } from "./graph-layout";
+ 
+ type Filter = "all" | HumanClass;
+ type SimNode = GraphNode & SimulationNodeDatum;
+ type SimEdge = Omit<GraphEdge, "source" | "target"> & { source: string | SimNode; target: string | SimNode };
+ 
+ function nodeColor(n: GraphNode): string {
+   if (n.type === "organism" && n.human_class) return HUMAN_COLORS[n.human_class];
+   return NODE_COLORS[n.type];
+ }
+ 
+-export default function GraphCanvas({ data, filter, onNodeClick }: {
++export default function GraphCanvas({ data, filter, activeFacets, onNodeSelect, onNodeFocus, onBackgroundClick }: {
+   data: GraphData;
+   filter: Filter;
+-  onNodeClick: (n: GraphNode) => void;
++  activeFacets?: ActiveFacets;
++  onNodeSelect: (n: GraphNode) => void;
++  onNodeFocus: (n: GraphNode) => void;
++  onBackgroundClick?: () => void;
+ }) {
+   const svgRef = useRef<SVGSVGElement>(null);
+   const gRef = useRef<SVGGElement>(null);
+   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+   const [nodes, setNodes] = useState<SimNode[]>([]);
+   const [edges, setEdges] = useState<SimEdge[]>([]);
+   const [hoverId, setHoverId] = useState<string | null>(null);
+   const [zoomK, setZoomK] = useState(1);
+   const draggedRef = useRef(false);
+   const simNodesRef = useRef<SimNode[]>([]);
+@@ -62,20 +65,22 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+ 
+     const zoom = d3zoom<SVGSVGElement, unknown>()
+       .scaleExtent(ZOOM_EXTENT)
+       .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
+         g.setAttribute("transform", ev.transform.toString());
+         transformRef.current = ev.transform.toString();
+         setZoomK(ev.transform.k);
+       });
+     zoomRef.current = zoom;
+     const svgSel = select(svg).call(zoom);
++    // double-click focuses a node (handleDoubleClick), not d3's zoom-in
++    svgSel.on("dblclick.zoom", null);
+ 
+     dragRef.current = drag<SVGGElement, SimNode>()
+       .on("start", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
+         // Keep the mousedown from reaching d3-zoom's svg listener, or the
+         // canvas pans while the node is being dragged.
+         ev.sourceEvent.stopPropagation();
+         draggedRef.current = false;
+         if (!ev.active) sim.alphaTarget(0.3).restart();
+         d.fx = d.x; d.fy = d.y;
+       })
+@@ -161,21 +166,26 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+     const y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+     const k = Math.min(800 / (x1 - x0), 600 / (y1 - y0), 2.5);
+     const t = zoomIdentity
+       .translate(400 - (k * (x0 + x1)) / 2, 300 - (k * (y0 + y1)) / 2)
+       .scale(k);
+     select(svg).transition().duration(600).call(zoom.transform, t);
+   };
+ 
+   const handleClick = (n: GraphNode) => {
+     if (draggedRef.current) return;
+-    onNodeClick(n);
++    onNodeSelect(n);
++  };
++
++  const handleDoubleClick = (n: GraphNode) => {
++    if (draggedRef.current) return;
++    onNodeFocus(n);
+   };
+ 
+   const coord = (p: string | SimNode): { x: number; y: number } =>
+     typeof p === "object" ? { x: p.x ?? 0, y: p.y ?? 0 } : { x: 0, y: 0 };
+ 
+   const hovered = hoverId ? nodes.find((n) => n.id === hoverId) ?? null : null;
+   const tipPos = hovered && hovered.x != null && hovered.y != null
+     ? svgPoint(hovered.x, hovered.y) : null;
+ 
+   return (
+@@ -230,47 +240,60 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+             if (svg && z) select(svg).transition().duration(200).call(z.scaleBy, 1 / 1.4);
+           }}>−</button>
+           <button className="btn" onClick={fitView}>Fit</button>
+         </div>
+       </div>
+ 
+       <div className="relative">
+         <svg ref={svgRef} viewBox="0 0 800 600" className="block h-auto w-full"
+           style={{ background: "var(--surface)", touchAction: "none" }} role="img">
+           <g ref={gRef}>
++            {onBackgroundClick && (
++              // transparent (not fill="none") so the interior is hit-testable:
++              // clicking empty canvas clears the inspector selection
++              <rect width={800} height={600} fill="transparent" onClick={onBackgroundClick} />
++            )}
+             <g>
+               {edges.map((e, i) => {
+                 const s = coord(e.source);
+                 const t = coord(e.target);
+                 const dimmed = neighbors !== null &&
+                   !(neighbors.has(String(typeof e.source === "object" ? e.source.id : e.source)) &&
+                     neighbors.has(String(typeof e.target === "object" ? e.target.id : e.target)));
+                 return (
+                   <line key={i} x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+                     stroke="var(--border)" strokeOpacity={dimmed ? 0.08 : 0.6} />
+                 );
+               })}
+             </g>
+             <g>
+               {nodes.map((n) => {
+                 const dimFilter = isDimmed(n, filter);
+                 const dimHover = neighbors !== null && !neighbors.has(n.id);
+-                const dimmed = dimFilter || dimHover;
++                const dimFacet = !!activeFacets && Object.keys(activeFacets).length > 0 &&
++                  !facetMatch(n.facets, activeFacets);
++                const dimmed = dimFilter || dimHover || dimFacet;
++                const r = 6 + Math.min(14, Math.log2(n.count ?? 1));
+                 return (
+                   <g key={n.id} className="graph-node"
+                     transform={`translate(${n.x ?? 0},${n.y ?? 0})`}
+                     opacity={dimmed ? 0.15 : 1}
+                     style={{ cursor: "pointer" }}
+                     onClick={() => handleClick(n)}
++                    onDoubleClick={() => handleDoubleClick(n)}
+                     onMouseEnter={() => setHoverId(n.id)}
+                     onMouseLeave={() => setHoverId((h) => (h === n.id ? null : h))}>
+-                    <circle r={6 + Math.min(14, Math.log2(n.count ?? 1))}
++                    {n.recent && (
++                      <circle r={r + 4} fill="none" stroke="var(--accent)"
++                        strokeWidth={2} strokeOpacity={0.8} />
++                    )}
++                    <circle r={r}
+                       fill={nodeColor(n)} fillOpacity={0.9} stroke="var(--surface)" />
+                     {flashId === n.id && (
+                       <circle r={16} fill="none" stroke="var(--accent)"
+                         className="graph-flash" />
+                     )}
+                     {labels.has(n.id) && (
+                       <text dy={-10 - Math.min(14, Math.log2(n.count ?? 1))}
+                         textAnchor="middle" fontSize={10} fill="var(--text)"
+                         style={{ pointerEvents: "none" }}>
+                         {n.label}
+@@ -291,19 +314,19 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
+           <div className="pointer-events-none absolute z-10 max-w-56 rounded border px-2 py-1 text-xs shadow"
+             style={{ left: tipPos.x * s, top: tipPos.y * s, transform: "translate(-50%, -120%)",
+                      background: "var(--surface)", borderColor: "var(--border)", color: "var(--text)" }}>
+             <div className="font-semibold">{hovered.label}</div>
+             <div className="text-[var(--text-dim)]">
+               {hovered.type}
+               {hovered.count != null && ` · ${hovered.count.toLocaleString()} runs`}
+               {hovered.human_class && ` · ${hovered.human_class}`}
+             </div>
+             <div className="text-[var(--text-dim)]">
+-              {hovered.link ? "click to open" : "click to explore"}
++              click for details · double-click to focus
+             </div>
+           </div>
+           );
+         })()}
+       </div>
+     </div>
+   );
+ }
+diff --git a/components/graph/GraphHub.tsx b/components/graph/GraphHub.tsx
+index c487da7..64d1761 100644
+--- a/components/graph/GraphHub.tsx
++++ b/components/graph/GraphHub.tsx
+@@ -1,74 +1,132 @@
+ "use client";
+ 
+ import { useRouter } from "next/navigation";
+-import { useEffect, useState } from "react";
++import { useEffect, useMemo, useState } from "react";
+ 
++import type { V2FacetsResponse } from "@/lib/api";
++import { useQuery } from "@/lib/useQuery";
+ import {
+   HUMAN_COLORS, NODE_COLORS,
+-  type GraphData, type GraphNode, type HumanClass, type NodeType,
++  type ActiveFacets, type DetailPayload, type GraphData, type GraphNode, type HumanClass, type NodeType,
+ } from "./graph-layout";
++import FacetRail, { groupsFromNodes, MAX_CHIPS } from "./FacetRail";
+ import GraphCanvas from "./GraphCanvas";
++import Inspector from "./Inspector";
+ 
+ type Filter = "all" | HumanClass;
+ 
+ const NODE_TYPES: NodeType[] = [
+   "submitter", "study", "sample", "organism", "taxon",
+   "platform", "strategy", "region", "publication", "term",
+ ];
+ const HUMAN_CLASSES: HumanClass[] = ["human", "human_associated", "other"];
+ 
+ // Stable empty input so the canvas (and its toolbar) can render while the
+ // graph data is still being fetched, without re-running the effect below.
+ const EMPTY_DATA: GraphData = { nodes: [], edges: [] };
+ 
+ export default function GraphHub({ focus }: { focus: string | null }) {
+   const router = useRouter();
+   const [data, setData] = useState<GraphData | null>(null);
+   const [loading, setLoading] = useState(true);
+   const [error, setError] = useState<string | null>(null);
+   const [filter, setFilter] = useState<Filter>("all");
++  const [active, setActive] = useState<ActiveFacets>({});
++  const [selected, setSelected] = useState<GraphNode | null>(null);
++  const [detail, setDetail] = useState<DetailPayload | null>(null);
++  const [detailError, setDetailError] = useState<string | null>(null);
++
++  // Facet options: platforms from the shared /v2/search/facets endpoint
++  // (Saudi-scoped, cached), capped at MAX_CHIPS like the other groups;
++  // domain/region/years derived from the loaded graph nodes themselves
++  // (see groupsFromNodes).
++  const facetsRes = useQuery<V2FacetsResponse>("/v2/search/facets");
+ 
+   useEffect(() => {
+     let cancelled = false;
+     setLoading(true);
+     setError(null);
+     const url = `/api/v2/graph${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`;
+     fetch(url, { cache: "no-store" })
+       .then(async (res) => {
+         if (!res.ok) throw new Error(`API /v2/graph -> ${res.status}`);
+         return res.json() as Promise<GraphData>;
+       })
+       .then((d) => {
+         if (!cancelled) {
+           setData(d);
++          setActive({});
+           setLoading(false);
+         }
+       })
+       .catch((err) => {
+         if (!cancelled) {
+           setError(String(err));
+           setLoading(false);
+         }
+       });
+     return () => {
+       cancelled = true;
+     };
+   }, [focus]);
+ 
+-  const onNodeClick = (n: GraphNode) => {
++  // Detail fetch follows the selection; a stale response (previous node or
++  // unmounted) must not land in the panel, same cancelled-flag pattern as above.
++  useEffect(() => {
++    if (!selected || selected.type === "publication") return;
++    let cancelled = false;
++    setDetail(null);
++    setDetailError(null);
++    fetch(`/api/v2/graph/detail?node=${encodeURIComponent(selected.id)}`, { cache: "no-store" })
++      .then(async (res) => {
++        if (!res.ok) throw new Error(`API /v2/graph/detail -> ${res.status}`);
++        return res.json() as Promise<DetailPayload>;
++      })
++      .then((d) => {
++        if (!cancelled) setDetail(d);
++      })
++      .catch((err) => {
++        if (!cancelled) setDetailError(String(err));
++      });
++    return () => {
++      cancelled = true;
++    };
++  }, [selected]);
++
++  const onNodeSelect = (n: GraphNode) => {
+     // publication placeholder nodes carry no data and no valid focus type
+     if (n.type === "publication") return;
+-    if (n.link) router.push(n.link);
+-    else router.push(`/graph?focus=${encodeURIComponent(n.id)}`);
++    setSelected(n);
+   };
+ 
++  const onNodeFocus = (n: GraphNode) => {
++    if (n.type === "publication") return;
++    router.push(`/graph?focus=${encodeURIComponent(n.id)}`);
++  };
++
++  // Inspector's "Focus graph" only has the node id, not the node object.
++  const onFocusId = (id: string) => {
++    router.push(`/graph?focus=${encodeURIComponent(id)}`);
++  };
++
++  const onClose = () => {
++    setSelected(null);
++    setDetail(null);
++    setDetailError(null);
++  };
++
++  const groups = useMemo(() => ({
++    ...groupsFromNodes(data?.nodes ?? []),
++    platform: (facetsRes.data?.platforms ?? []).map((p) => ({ value: p.name, count: p.runs })).slice(0, MAX_CHIPS),
++  }), [data, facetsRes.data]);
++
+   return (
+     <div className="space-y-4">
+       <div className="flex items-center gap-4">
+         <div>
+           <h1 className="text-2xl font-bold">Knowledge graph</h1>
+           {focus && <p className="text-sm text-[var(--text-dim)]">{focus}</p>}
+         </div>
+         {focus && (
+           <button className="btn ml-auto shrink-0" onClick={() => router.push("/graph")}>
+             ← Back to overview
+@@ -95,18 +153,38 @@ export default function GraphHub({ focus }: { focus: string | null }) {
+           >
+             {f !== "all" && (
+               <span
+                 className="mr-1 inline-block h-2.5 w-2.5 rounded-full align-middle"
+                 style={{ background: HUMAN_COLORS[f as HumanClass] }}
+               />
+             )}
+             {f === "all" ? "all" : f}
+           </button>
+         ))}
++        <span className="mx-1 text-[var(--text-dim)]">|</span>
++        <span className="inline-flex items-center gap-1 text-[var(--text-dim)]">
++          <span className="inline-block h-2.5 w-2.5 rounded-full border-2"
++            style={{ borderColor: "var(--accent)" }} />
++          recent ≤180d
++        </span>
+       </div>
+ 
+       {error && <p className="text-danger">{error}</p>}
+       {loading && <p className="text-dim">Loading graph…</p>}
+-      <GraphCanvas data={data ?? EMPTY_DATA} filter={filter} onNodeClick={onNodeClick} />
++      {detailError && <p className="text-danger">{detailError}</p>}
++      <div className="flex flex-col items-start gap-4 xl:flex-row">
++        <FacetRail facets={groups} active={active} onChange={setActive} />
++        <div className="min-w-0 flex-1 self-stretch">
++          <GraphCanvas data={data ?? EMPTY_DATA} filter={filter} activeFacets={active}
++            onNodeSelect={onNodeSelect} onNodeFocus={onNodeFocus}
++            onBackgroundClick={selected ? onClose : undefined} />
++        </div>
++        {selected && (
++          <Inspector node={selected} detail={detail}
++            onClose={onClose} onFocus={onFocusId}
++            onOpen={(link) => router.push(link)}
++            onSearch={(href) => router.push(href)} />
++        )}
++      </div>
+     </div>
+   );
+ }
+diff --git a/components/graph/Inspector.test.tsx b/components/graph/Inspector.test.tsx
+new file mode 100644
+index 0000000..9a41351
+--- /dev/null
++++ b/components/graph/Inspector.test.tsx
+@@ -0,0 +1,68 @@
++// @vitest-environment happy-dom
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import Inspector from "./Inspector";
++import type { DetailPayload, GraphNode } from "./graph-layout";
++
++afterEach(cleanup);
++
++function studyNode(): GraphNode {
++  return { id: "study:A", type: "study", label: "A", link: "/study?id=A" };
++}
++
++describe("Inspector", () => {
++  it("renders study detail fields and actions", () => {
++    const onFocus = vi.fn();
++    render(<Inspector node={studyNode()}
++      detail={{ type: "study", accession: "A", title: "T", runs: 3, bytes: 100, top_organisms: [{ name: "Homo sapiens", runs: 3 }], platforms: ["ILLUMINA"] } as DetailPayload}
++      onClose={() => {}} onFocus={onFocus} onOpen={() => {}} onSearch={() => {}} />);
++    expect(screen.getByText("Homo sapiens")).toBeTruthy();
++    expect(screen.getByText("3 runs")).toBeTruthy();
++    fireEvent.click(screen.getByText("Focus graph"));
++    expect(onFocus).toHaveBeenCalledWith("study:A");
++  });
++
++  it("close button calls onClose and Open page calls onOpen with node.link", () => {
++    const onClose = vi.fn();
++    const onOpen = vi.fn();
++    render(<Inspector node={studyNode()}
++      detail={{ type: "study", accession: "A" } as DetailPayload}
++      onClose={onClose} onFocus={() => {}} onOpen={onOpen} onSearch={() => {}} />);
++    fireEvent.click(screen.getByRole("button", { name: "Close" }));
++    expect(onClose).toHaveBeenCalledTimes(1);
++    fireEvent.click(screen.getByRole("button", { name: "Open page" }));
++    expect(onOpen).toHaveBeenCalledWith("/study?id=A");
++  });
++
++  it("disables Open page when the node has no link", () => {
++    render(<Inspector node={{ id: "term:T1", type: "term", label: "T1" }}
++      detail={{ type: "term", id: "T1", label: "L", runs: 1, samples: 2, top_studies: [] } as DetailPayload}
++      onClose={() => {}} onFocus={() => {}} onOpen={() => {}} onSearch={() => {}} />);
++    expect((screen.getByRole("button", { name: "Open page" }) as HTMLButtonElement).disabled).toBe(true);
++    // term nodes have no search mapping — the button is omitted
++    expect(screen.queryByRole("button", { name: /View runs in search/ })).toBeNull();
++  });
++
++  it("View runs in search maps node types to search hrefs", () => {
++    const onSearch = vi.fn();
++    const { rerender } = render(<Inspector
++      node={{ id: "organism:Homo sapiens", type: "organism", label: "Homo sapiens" }}
++      detail={{ type: "organism", name: "Homo sapiens", studies: 1, runs: 2 } as DetailPayload}
++      onClose={() => {}} onFocus={() => {}} onOpen={() => {}} onSearch={onSearch} />);
++    fireEvent.click(screen.getByRole("button", { name: "View runs in search" }));
++    expect(onSearch).toHaveBeenCalledWith("/search?organism=Homo%20sapiens");
++
++    rerender(<Inspector node={{ id: "sample:SAMEA1", type: "sample", label: "SAMEA1" }}
++      detail={{ type: "sample", accession: "SAMEA1", runs: 1, bytes: 0 } as DetailPayload}
++      onClose={() => {}} onFocus={() => {}} onOpen={() => {}} onSearch={onSearch} />);
++    fireEvent.click(screen.getByRole("button", { name: "View runs in search" }));
++    expect(onSearch).toHaveBeenCalledWith("/search?q=SAMEA1");
++  });
++
++  it("falls back to em dash for missing values", () => {
++    render(<Inspector node={{ id: "sample:SAMEA1", type: "sample", label: "SAMEA1" }}
++      detail={null}
++      onClose={() => {}} onFocus={() => {}} onOpen={() => {}} onSearch={() => {}} />);
++    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
++  });
++});
+diff --git a/components/graph/Inspector.tsx b/components/graph/Inspector.tsx
+new file mode 100644
+index 0000000..c5e2ae3
+--- /dev/null
++++ b/components/graph/Inspector.tsx
+@@ -0,0 +1,225 @@
++"use client";
++
++import { NODE_COLORS, type DetailPayload, type GraphNode } from "./graph-layout";
++
++export default function Inspector({ node, detail, onClose, onFocus, onOpen, onSearch }: {
++  node: GraphNode;
++  detail: DetailPayload | null;
++  onClose: () => void;
++  onFocus: (id: string) => void;
++  onOpen: (link: string) => void;
++  onSearch: (href: string) => void;
++}) {
++  const d: Record<string, unknown> = detail ?? {};
++  const href = searchHref(node);
++
++  return (
++    <aside className="card w-full shrink-0 p-0 xl:w-80" aria-label="Node inspector">
++      <header className="flex items-start gap-2 border-b p-3"
++        style={{ borderColor: "var(--border)" }}>
++        <div className="min-w-0 flex-1">
++          <div className="break-words font-semibold">{node.label}</div>
++          <span className="badge mt-1 inline-flex items-center gap-1">
++            <span className="inline-block h-2 w-2 rounded-full"
++              style={{ background: NODE_COLORS[node.type] }} />
++            {node.type}
++          </span>
++        </div>
++        <button className="btn shrink-0 px-2 py-1" aria-label="Close" onClick={onClose}>✕</button>
++      </header>
++
++      <div className="space-y-1.5 p-3 text-sm">
++        {detail === null && <p className="text-dim">Loading detail…</p>}
++        <Fields node={node} d={d} />
++      </div>
++
++      <footer className="flex flex-wrap gap-2 border-t p-3"
++        style={{ borderColor: "var(--border)" }}>
++        <button className="btn btn-accent" onClick={() => onFocus(node.id)}>Focus graph</button>
++        <button className="btn" disabled={!node.link}
++          onClick={() => node.link && onOpen(node.link)}>
++          Open page
++        </button>
++        {href && <button className="btn" onClick={() => onSearch(href)}>View runs in search</button>}
++      </footer>
++    </aside>
++  );
++}
++
++// "View runs in search" target per node type; term/taxon have no search facet.
++function searchHref(node: GraphNode): string | null {
++  const id = encodeURIComponent(node.id.slice(node.type.length + 1));
++  switch (node.type) {
++    case "sample": return `/search?q=${id}`;
++    case "organism": return `/search?organism=${id}`;
++    case "submitter": return `/search?submitter=${id}`;
++    case "region": return `/search?region=${id}`;
++    case "platform": return `/search?platform=${id}`;
++    case "strategy": return `/search?strategy=${id}`;
++    case "study": return `/search?study=${id}`;
++    default: return null;
++  }
++}
++
++// ---- defensive readers: the endpoint's type-specific keys arrive as unknown ----
++
++const txt = (v: unknown): string => (typeof v === "string" && v ? v : "—");
++const int = (v: unknown): number | null => (typeof v === "number" ? v : null);
++const dash = (v: unknown): string => {
++  const n = int(v);
++  return n === null ? "—" : n.toLocaleString();
++};
++const runs = (v: unknown): string => {
++  const n = int(v);
++  return n === null ? "—" : `${n.toLocaleString()} runs`;
++};
++const range = (a: unknown, b: unknown): string => {
++  const x = txt(a), y = txt(b);
++  if (x === "—" && y === "—") return "—";
++  return x === y ? x : `${x} → ${y}`;
++};
++
++function bytes(v: unknown): string {
++  let n = typeof v === "number" ? v : Number(v);
++  if (!Number.isFinite(n)) return "—";
++  if (n < 1024) return `${n} B`;
++  const units = ["KB", "MB", "GB", "TB"];
++  let i = -1;
++  do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
++  return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
++}
++
++function lineageText(v: unknown): string {
++  if (!v || typeof v !== "object") return "—";
++  const l = v as Record<string, unknown>;
++  const parts = [l.genus, l.family, l.phylum]
++    .filter((x): x is string => typeof x === "string" && !!x);
++  return parts.length ? parts.join(" › ") : "—";
++}
++
++interface TopItem { name?: unknown; accession?: unknown; runs?: unknown }
++
++// name (runs) rows for top_organisms / top_studies; the parenthesized count
++// keeps "N runs" reserved for the stats rows.
++function TopList({ items, labelKey }: { items: unknown; labelKey: "name" | "accession" }) {
++  if (!Array.isArray(items) || items.length === 0) {
++    return <Row label={labelKey === "name" ? "Top organisms" : "Top studies"} value="—" />;
++  }
++  return (
++    <div>
++      <div className="text-dim">{labelKey === "name" ? "Top organisms" : "Top studies"}</div>
++      <ul className="mt-0.5 space-y-0.5">
++        {(items as TopItem[]).map((it, i) => (
++          <li key={i} className="flex items-baseline justify-between gap-2">
++            <span className="break-all">{txt(it[labelKey])}</span>
++            <span className="text-dim shrink-0">({dash(it.runs)})</span>
++          </li>
++        ))}
++      </ul>
++    </div>
++  );
++}
++
++function Chips({ items, label }: { items: unknown; label: string }) {
++  if (!Array.isArray(items) || items.length === 0) return <Row label={label} value="—" />;
++  return (
++    <div>
++      <div className="text-dim">{label}</div>
++      <div className="mt-0.5 flex flex-wrap gap-1">
++        {items.map((p, i) => (
++          <span key={i} className="badge">{txt(p)}</span>
++        ))}
++      </div>
++    </div>
++  );
++}
++
++function Row({ label, value }: { label: string; value: string }) {
++  return (
++    <div className="flex items-baseline justify-between gap-2">
++      <span className="text-dim shrink-0">{label}</span>
++      <span className="text-right break-words">{value}</span>
++    </div>
++  );
++}
++
++// ---- per-type field lists (keys mirror the Task 2 detail endpoint) ----
++
++function Fields({ node, d }: { node: GraphNode; d: Record<string, unknown> }) {
++  switch (node.type) {
++    case "study":
++      return (
++        <>
++          <Row label="Title" value={txt(d.title)} />
++          <Row label="Submitter" value={txt(d.submitter)} />
++          <Row label="Dates" value={range(d.date_min, d.date_max)} />
++          <Row label="Samples" value={dash(d.samples)} />
++          <Row label="Runs" value={runs(d.runs)} />
++          <Row label="Bytes" value={bytes(d.bytes)} />
++          {typeof d.abstract === "string" && d.abstract && (
++            <p className="pt-1 text-[var(--text-dim)]">{d.abstract}</p>
++          )}
++          <TopList items={d.top_organisms} labelKey="name" />
++          <Chips items={d.platforms} label="Platforms" />
++        </>
++      );
++    case "sample":
++      return (
++        <>
++          <Row label="Organism" value={txt(d.organism)} />
++          <Row label="Lineage" value={lineageText(d.lineage)} />
++          <Row label="Host" value={txt(d.host)} />
++          <Row label="Tissue" value={txt(d.tissue)} />
++          <Row label="Region" value={txt(d.region)} />
++          <Row label="Collected" value={txt(d.collection_date)} />
++          <Row label="Runs" value={runs(d.runs)} />
++          <Row label="Bytes" value={bytes(d.bytes)} />
++          <Row label="Study" value={txt(d.study)} />
++        </>
++      );
++    case "organism":
++      return (
++        <>
++          <Row label="Lineage" value={lineageText(d.lineage)} />
++          <Row label="Human class" value={txt(d.human_class)} />
++          <Row label="Studies" value={dash(d.studies)} />
++          <Row label="Runs" value={runs(d.runs)} />
++        </>
++      );
++    case "submitter":
++      return (
++        <>
++          <Row label="Studies" value={dash(d.studies)} />
++          <Row label="Runs" value={runs(d.runs)} />
++          <TopList items={d.top_organisms} labelKey="name" />
++        </>
++      );
++    case "platform": case "strategy": case "region":
++      return (
++        <>
++          <Row label="Runs" value={runs(d.runs)} />
++          <TopList items={d.top_studies} labelKey="accession" />
++        </>
++      );
++    case "term":
++      return (
++        <>
++          <Row label="Label" value={txt(d.label)} />
++          <Row label="Runs" value={runs(d.runs)} />
++          <Row label="Samples" value={dash(d.samples)} />
++          <TopList items={d.top_studies} labelKey="accession" />
++        </>
++      );
++    case "taxon":
++      return (
++        <>
++          <Row label="Rank" value={txt(d.rank)} />
++          <Row label="Name" value={txt(d.name)} />
++          <Row label="Organisms" value={dash(d.organisms)} />
++          <Row label="Runs" value={runs(d.runs)} />
++        </>
++      );
++    default:
++      return <Row label="Type" value={node.type} />;
++  }
++}
+diff --git a/components/graph/graph-layout.test.ts b/components/graph/graph-layout.test.ts
+index 75411c8..7224f3c 100644
+--- a/components/graph/graph-layout.test.ts
++++ b/components/graph/graph-layout.test.ts
+@@ -1,26 +1,52 @@
+ import { describe, expect, it } from "vitest";
+ import {
+-  filterNodes, isDimmed, neighborIds, NODE_COLORS, HUMAN_COLORS,
+-  visibleLabelIds, ZOOM_LABEL_THRESHOLD, type GraphEdge, type GraphNode, type NodeType,
++  facetMatch, filterNodes, isDimmed, neighborIds, NODE_COLORS, HUMAN_COLORS,
++  visibleLabelIds, ZOOM_LABEL_THRESHOLD, type GraphEdge, type GraphNode, type NodeFacets, type NodeType,
+ } from "./graph-layout";
+ 
+ const nodes: GraphNode[] = [
+   { id: "study:A", type: "study", label: "Camel Microbiome" },
+   { id: "sample:S1", type: "sample", label: "SRR1" },
+   { id: "organism:O1", type: "organism", label: "Camelus dromedarius" },
+ ];
+ const edges: GraphEdge[] = [
+   { source: "study:A", target: "sample:S1", kind: "samples" },
+   { source: "sample:S1", target: "organism:O1", kind: "classifies" },
+ ];
+ 
++describe("facetMatch", () => {
++  const f: NodeFacets = { domain: "human", region: "Riyadh", platforms: ["ILLUMINA"], years: [2020, 2024] as [number, number] };
++  it("passes when every active facet matches", () => {
++    expect(facetMatch(f, { domain: "human", region: "Riyadh", platform: "ILLUMINA", year: 2022 })).toBe(true);
++  });
++  it("fails on any mismatch and on missing facet info", () => {
++    expect(facetMatch(f, { domain: "other" })).toBe(false);
++    expect(facetMatch(f, { year: 1999 })).toBe(false);
++    expect(facetMatch(undefined, { platform: "ILLUMINA" })).toBe(false);
++  });
++  it("empty active facets passes everything", () => {
++    expect(facetMatch(undefined, {})).toBe(true);
++  });
++  it("region selection dims nothing (facets.region is never populated)", () => {
++    // Region chips derive from region-type node labels, but scopeFacets never
++    // sets node.facets.region, so no node can be evaluated against a region:
++    // even a diverging region and facet-less nodes pass, and other facets
++    // combined with a region still dim as before.
++    expect(facetMatch(f, { region: "Riyadh" })).toBe(true);
++    expect(facetMatch(f, { region: "Jeddah" })).toBe(true);
++    expect(facetMatch(undefined, { region: "Riyadh" })).toBe(true);
++    expect(facetMatch(f, { region: "Riyadh", platform: "ILLUMINA" })).toBe(true);
++    expect(facetMatch(f, { region: "Riyadh", platform: "OXFORD_NANOPORE" })).toBe(false);
++  });
++});
++
+ describe("neighborIds", () => {
+   it("returns self plus direct neighbors", () => {
+     expect(neighborIds(edges, "sample:S1")).toEqual(new Set(["sample:S1", "study:A", "organism:O1"]));
+   });
+   it("returns only self for isolated or unknown node", () => {
+     expect(neighborIds(edges, "term:T1")).toEqual(new Set(["term:T1"]));
+   });
+ });
+ 
+ describe("visibleLabelIds", () => {
+diff --git a/components/graph/graph-layout.ts b/components/graph/graph-layout.ts
+index 01eed4d..d482c75 100644
+--- a/components/graph/graph-layout.ts
++++ b/components/graph/graph-layout.ts
+@@ -1,17 +1,25 @@
+ export type NodeType = "submitter" | "study" | "sample" | "organism" | "taxon"
+   | "platform" | "strategy" | "region" | "publication" | "term";
+ export type HumanClass = "human" | "human_associated" | "other";
++// Mirrors the facets/recent fields Task 1 added to the graph API response.
++export interface NodeFacets {
++  domain?: HumanClass; region?: string; platforms?: string[]; years?: [number, number];
++}
+ export interface GraphNode {
+   id: string; type: NodeType; label: string; count?: number;
+-  human_class?: HumanClass; link?: string | null;
++  human_class?: HumanClass; facets?: NodeFacets; recent?: boolean;
++  link?: string | null;
+ }
++// Task 2 detail payload: type-specific keys plus the node type. Renderers
++// read fields defensively (`?? "—"`), so unknown values are fine.
++export type DetailPayload = Record<string, unknown> & { type: NodeType };
+ export interface GraphEdge { source: string; target: string; kind: string; count?: number }
+ export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[] }
+ 
+ // Theme-independent hues per node type. These hexes are intentional
+ // exceptions to the CSS-variable rule: SVG canvas colors can't follow
+ // `data-theme` without re-running the simulation/re-render.
+ export const NODE_COLORS: Record<NodeType, string> = {
+   submitter: "#6366f1", study: "#2563eb", sample: "#0ea5e9",
+   organism: "#2dd4bf", taxon: "#14b8a6", platform: "#a855f7",
+   strategy: "#c084fc", region: "#84cc16", publication: "#64748b", term: "#f97316",
+@@ -25,20 +33,53 @@ export const HUMAN_COLORS: Record<HumanClass, string> = {
+ 
+ export function isDimmed(
+   n: Pick<GraphNode, "type" | "human_class">,
+   filter: "all" | HumanClass
+ ): boolean {
+   if (filter === "all") return false;
+   if (n.type !== "organism" && n.type !== "sample" && n.type !== "taxon") return false;
+   return n.human_class !== filter;
+ }
+ 
++// ---- facet rail dimming: set facets ANDed against the node's facets ----
++
++export interface ActiveFacets { domain?: string; region?: string; platform?: string; year?: number }
++
++// True when the node passes every set facet. Nodes without facet info fail
++// as soon as any evaluable facet is active; platforms match by intersection;
++// a node's years range must include the active year.
++//
++// Region is deliberately NOT evaluated: scopeFacets (functions/api/v2/graph.ts)
++// never populates node.facets.region — only years/platforms/domain — so a
++// region selection can never match any node, and failing here dimmed the whole
++// canvas (0.15), including the region node itself, on any region chip click.
++// The rail's region chips (derived from region-type node labels, see
++// FacetRail) only feed the /search?region= deep-link, so a region-only
++// selection passes every node and dims nothing.
++export function facetMatch(
++  f: GraphNode["facets"] | undefined,
++  active: ActiveFacets
++): boolean {
++  if (active.domain === undefined && active.platform === undefined && active.year === undefined) {
++    return true;
++  }
++  if (!f) return false;
++  if (active.domain !== undefined && f.domain !== active.domain) return false;
++  if (active.platform !== undefined && !(f.platforms ?? []).includes(active.platform)) return false;
++  if (active.year !== undefined) {
++    const [y0, y1] = f.years ?? [];
++    if (y0 === undefined || y1 === undefined) return false;
++    if (active.year < y0 || active.year > y1) return false;
++  }
++  return true;
++}
++
+ export const ZOOM_LABEL_THRESHOLD = 1.5;
+ export const ZOOM_EXTENT: [number, number] = [0.2, 8];
+ 
+ export function neighborIds(edges: GraphEdge[], id: string): Set<string> {
+   const out = new Set<string>([id]);
+   for (const e of edges) {
+     if (e.source === id) out.add(e.target);
+     if (e.target === id) out.add(e.source);
+   }
+   return out;
+diff --git a/functions/api/v2/_lib/filters.ts b/functions/api/v2/_lib/filters.ts
+index 96bbefd..78ed388 100644
+--- a/functions/api/v2/_lib/filters.ts
++++ b/functions/api/v2/_lib/filters.ts
+@@ -25,20 +25,21 @@ export function parseV2Filters(url: URL): V2Where {
+       params.push(v);
+     }
+   };
+   eq("s.organism", p.get("organism"));
+   eq("s.country", p.get("country"));
+   eq("s.region", p.get("region"));
+   eq("s.host", p.get("host"));
+   eq("r.platform", p.get("platform"));
+   eq("r.library_strategy", p.get("strategy"));
+   eq("sub.center_name", p.get("submitter"));
++  eq("r.study_accession", p.get("study"));
+   const from = p.get("from");
+   if (from) {
+     conds.push("r.submitted_date >= ?");
+     params.push(from);
+   }
+   const to = p.get("to");
+   if (to) {
+     conds.push("r.submitted_date <= ?");
+     params.push(`${to}~`);
+   }
+diff --git a/functions/api/v2/filters.test.ts b/functions/api/v2/filters.test.ts
+index 0455252..0fc817e 100644
+--- a/functions/api/v2/filters.test.ts
++++ b/functions/api/v2/filters.test.ts
+@@ -20,11 +20,18 @@ describe("parseV2Filters", () => {
+     const { clause, params } = parseV2Filters(new URL("http://x/api/v2/search?page=2"));
+     expect(clause).toBe(" WHERE s.country = 'SA'");
+     expect(params).toEqual([]);
+   });
+ 
+   it("a contradictory non-Saudi country param yields an empty result, not a leak", () => {
+     const { clause } = parseV2Filters(new URL("http://x/api/v2/search?country=QA"));
+     expect(clause).toContain("s.country = 'SA'");
+     expect(clause).toContain("s.country = ?");
+   });
++
++  it("study param adds an equality filter on r.study_accession", () => {
++    const { clause, params } = parseV2Filters(new URL("https://x/v2/search?study=PRJNA1249945"));
++    expect(clause).toContain("r.study_accession = ?");
++    expect(clause).toContain("s.country = 'SA'");
++    expect(params).toContain("PRJNA1249945");
++  });
+ });
+diff --git a/functions/api/v2/graph.test.ts b/functions/api/v2/graph.test.ts
+index 17596ac..d8f7773 100644
+--- a/functions/api/v2/graph.test.ts
++++ b/functions/api/v2/graph.test.ts
+@@ -18,20 +18,26 @@ globalThis.caches = {
+ // rows returned per SQL substring; the stub asserts Saudi scope the way D1 would
+ function stubEnv(path: string) {
+   const prepared: string[] = [];
+   const ctx = {
+     request: new Request(path),
+     env: {
+       DB: {
+         prepare: (sql: string) => {
+           prepared.push(sql);
+           const all = async () => {
++            if (sql.includes("MIN(CAST(substr") || sql.includes("GROUP_CONCAT"))
++              return { results: [{ id: "PRJNA1249945", y0: 2023, y1: 2024, recent: 1, platforms: "ILLUMINA", organism: "Homo sapiens", tax_id: 9606, host: null }] };
++            if (sql.includes("JOIN taxonomy t") && !sql.includes("ena_runs"))
++              return { results: [{ name: "Homo sapiens", genus: "Homo", family: "Hominidae", phylum: "Chordata" }] };
++            if (sql.includes("JOIN taxonomy t"))
++              return { results: [{ name: "Camelus dromedarius", tax_id: 9838, n: 2 }] };
+             if (sql.includes("submitters") && sql.includes("GROUP BY"))
+               return { results: [{ name: "KAUST", runs: 10 }] };
+             if (sql.includes("FROM studies"))
+               return { results: [{ accession: "PRJNA1249945", title: "Camel Microbiome", runs: 4 }] };
+             if (sql.includes("FROM samples") && sql.includes("organism"))
+               return { results: [{ name: "Homo sapiens", tax_id: 9606, n: 1 }] };
+             if (sql.includes("sample_terms"))
+               return { results: [{ term_id: "UBERON:0000059", field: "tissue" }] };
+             return { results: [] };
+           };
+@@ -86,16 +92,38 @@ describe("GET /api/v2/graph", () => {
+     }
+   });
+ 
+   it("sample focus returns 200 with Saudi scope", async () => {
+     const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=sample:SRS27212955&t=4");
+     const res = await onRequestGet(ctx);
+     expect(res.status).toBe(200);
+     for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
+   });
+ 
++  it("study focus nodes carry facets and taxon lineage", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=study:PRJNA1249945&t=9");
++    const res = await onRequestGet(ctx);
++    const body = (await res.json()) as {
++      nodes: { type: string; facets?: { domain?: string; years?: number[]; platforms?: string[] }; recent?: boolean }[];
++    };
++    const study = body.nodes.find((n) => n.type === "study");
++    expect(study?.facets?.domain).toBeDefined();
++    expect(study?.facets?.years?.length).toBe(2);
++    expect(body.nodes.some((n) => n.type === "taxon")).toBe(true);
++    for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
++  });
++
++  it("taxon focus returns child organisms", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=genus:Camelus&t=10");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(200);
++    const body = (await res.json()) as { nodes: { type: string }[] };
++    expect(body.nodes.some((n) => n.type === "organism")).toBe(true);
++    for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
++  });
++
+   it("rejects a malformed focus", async () => {
+     const { ctx } = stubEnv("http://x/api/v2/graph?focus=bogus&t=2");
+     const res = await onRequestGet(ctx);
+     expect(res.status).toBe(400);
+   });
+ });
+diff --git a/functions/api/v2/graph.ts b/functions/api/v2/graph.ts
+index 7b78824..62fd993 100644
+--- a/functions/api/v2/graph.ts
++++ b/functions/api/v2/graph.ts
+@@ -1,18 +1,20 @@
+ import { cachedJson, STATS_TTL } from "../_lib/cache";
+ import { Env, json } from "../_lib/db";
+ import { classifyHuman, HumanClass } from "./_lib/human";
+ 
+ type NodeType = "submitter" | "study" | "sample" | "organism" | "taxon"
+   | "platform" | "strategy" | "region" | "publication" | "term";
+ interface GraphNode { id: string; type: NodeType; label: string; count?: number;
+-  human_class?: HumanClass; link?: string | null }
++  human_class?: HumanClass;
++  facets?: { domain?: HumanClass; region?: string; platforms?: string[]; years?: [number, number] };
++  recent?: boolean; link?: string | null }
+ interface GraphEdge { source: string; target: string; kind: string; count?: number }
+ interface Graph { nodes: GraphNode[]; edges: GraphEdge[] }
+ 
+ const CAP = 50;
+ const SA = `s.country = 'SA'`;
+ const SAMPLES_RUNS = `JOIN samples s ON s.biosample_accession = r.biosample_accession`;
+ // for queries anchored at sample_terms (no ena_runs alias r in scope)
+ const TERMS_SAMPLES = `JOIN samples s ON s.biosample_accession = st.biosample_accession`;
+ 
+ type Db = D1Database;
+@@ -31,20 +33,98 @@ function linkFor(type: NodeType, key: string, label: string): string | null | un
+     case "study": return `/study?id=${encodeURIComponent(key)}`;
+     case "sample": return `/search?q=${encodeURIComponent(key)}`;
+     case "organism": return `/search?organism=${encodeURIComponent(key)}`;
+     case "platform": return `/search?platform=${encodeURIComponent(key)}`;
+     case "strategy": return `/search?strategy=${encodeURIComponent(key)}`;
+     case "region": return `/search?region=${encodeURIComponent(key)}`;
+     default: return undefined;
+   }
+ }
+ 
++// ---- node facets: domain / platforms / years / recent, batched per scope ----
++
++interface FacetRow { id: string; y0: number | null; y1: number | null; recent: number; platforms: string | null; organism: string | null; tax_id: number | null; host: string | null; }
++
++type NodeFacets = NonNullable<GraphNode["facets"]> & { recent: boolean };
++
++// Batched per-node facets over the ids already at hand (IN-list capped by CAP);
++// `joinSql` adds the minimal dim joins the scope column needs beyond
++// ena_runs+samples (studies for st.accession, studies+submitters for sub.center_name).
++async function scopeFacets(db: Db, scopeCol: string, ids: string[], joinSql = ""): Promise<Map<string, NodeFacets>> {
++  if (!ids.length) return new Map();
++  const ph = ids.map(() => "?").join(",");
++  const { results } = await db.prepare(
++    `SELECT ${scopeCol} AS id,
++            MIN(CAST(substr(r.submitted_date, 1, 4) AS INTEGER)) AS y0,
++            MAX(CAST(substr(r.submitted_date, 1, 4) AS INTEGER)) AS y1,
++            MAX(CASE WHEN r.submitted_date >= date('now', '-180 days') THEN 1 ELSE 0 END) AS recent,
++            GROUP_CONCAT(DISTINCT r.platform) AS platforms,
++            s.organism AS organism, s.tax_id AS tax_id, s.host AS host
++     FROM ena_runs r ${SAMPLES_RUNS} ${joinSql}
++     WHERE ${scopeCol} IN (${ph}) AND ${SA}
++     GROUP BY ${scopeCol}, s.organism, s.tax_id, s.host`
++  ).bind(...ids).all<FacetRow>();
++  const out = new Map<string, NodeFacets>();
++  for (const row of results) {
++    const cur = out.get(row.id) ?? { recent: false };
++    if (row.y0 != null) cur.years = [Math.min(cur.years?.[0] ?? row.y0, row.y0), Math.max(cur.years?.[1] ?? row.y1 ?? row.y0, row.y1 ?? row.y0)] as [number, number];
++    if (row.recent) cur.recent = true;
++    if (row.platforms) cur.platforms = [...new Set([...(cur.platforms ?? []), ...row.platforms.split(",")])].slice(0, 5);
++    // domain aggregation: human > human_associated > other. Tissue terms are
++    // intentionally omitted at group scope — name/tax_id/host carry the common
++    // cases; keep classifyHuman as the only classification rule source.
++    const cls = classifyHuman(row.organism, row.tax_id, row.host, []);
++    const rank = { other: 0, human_associated: 1, human: 2 } as const;
++    if (!cur.domain || rank[cls] > rank[cur.domain as keyof typeof rank]) cur.domain = cls;
++    out.set(row.id, cur);
++  }
++  return out;
++}
++
++async function attachFacets(db: Db, nodes: GraphNode[], type: NodeType, scopeCol: string, joinSql = "") {
++  const ofType = nodes.filter((n) => n.type === type);
++  if (!ofType.length) return;
++  const ids = ofType.map((n) => n.id.slice(n.type.length + 1)).slice(0, CAP);
++  const facets = await scopeFacets(db, scopeCol, ids, joinSql);
++  for (const n of ofType) {
++    const f = facets.get(n.id.slice(n.type.length + 1));
++    if (!f) continue;
++    const { recent, ...rest } = f;
++    n.facets = rest;
++    n.recent = recent;
++  }
++}
++
++// taxon lineage chain: organism → genus:<g> → family:<f> → phylum:<p>,
++// omitting ranks the taxonomy table has no value for.
++function addTaxonChain(
++  nodes: GraphNode[], edges: GraphEdge[], childId: string,
++  lineage: { genus?: string | null; family?: string | null; phylum?: string | null } | undefined,
++) {
++  if (!lineage) return;
++  const ranks: { rank: string; value: string | null | undefined }[] = [
++    { rank: "genus", value: lineage.genus },
++    { rank: "family", value: lineage.family },
++    { rank: "phylum", value: lineage.phylum },
++  ];
++  let cur = childId;
++  for (const { rank, value } of ranks) {
++    if (!value) continue;
++    const id = `taxon:${rank}:${value}`;
++    if (!nodes.some((n) => n.id === id))
++      nodes.push(node("taxon", `${rank}:${value}`, value, { link: linkFor("taxon", `${rank}:${value}`, value) }));
++    if (!edges.some((e) => e.source === cur && e.target === id && e.kind === "classified_in"))
++      addEdge(edges, cur, id, "classified_in");
++    cur = id;
++  }
++}
++
+ // ---- default hub: top Saudi submitters and their studies ----
+ 
+ async function hubSubmitter(db: Db): Promise<Graph> {
+   const nodes: GraphNode[] = [];
+   const edges: GraphEdge[] = [];
+   const submitters = await db.prepare(
+     `SELECT sub.center_name AS name, COUNT(*) AS runs
+      FROM ena_runs r ${SAMPLES_RUNS}
+      JOIN studies st ON st.accession = r.study_accession
+      JOIN submitters sub ON sub.id = st.submitter_id
+@@ -60,20 +140,24 @@ async function hubSubmitter(db: Db): Promise<Graph> {
+        JOIN ena_runs r ON r.study_accession = st.accession
+        ${SAMPLES_RUNS}
+        WHERE sub.center_name = ? AND ${SA}
+        GROUP BY st.accession ORDER BY runs DESC LIMIT 10`
+     ).bind(sub.name).all<{ accession: string; title: string | null; runs: number }>();
+     for (const st of studies.results) {
+       nodes.push(node("study", st.accession, st.title ?? st.accession, { count: st.runs, link: linkFor("study", st.accession, st.title ?? st.accession) }));
+       addEdge(edges, subId, `study:${st.accession}`, "submitted", st.runs);
+     }
+   }
++  await attachFacets(db, nodes, "submitter", "sub.center_name",
++    "JOIN studies st ON st.accession = r.study_accession JOIN submitters sub ON sub.id = st.submitter_id");
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
+   return { nodes, edges };
+ }
+ 
+ // ---- shared run-attribute neighbors (platform / strategy / region) ----
+ 
+ async function runAttributeNodes(
+   db: Db, scopeSql: string, scopeParam: string, self: GraphNode, edges: GraphEdge[], nodes: GraphNode[]
+ ) {
+   const attrs: { type: NodeType; sql: string }[] = [
+     { type: "platform", sql: `SELECT r.platform AS name, COUNT(*) AS runs FROM ena_runs r ${SAMPLES_RUNS} WHERE ${scopeSql} AND ${SA} AND r.platform IS NOT NULL GROUP BY r.platform ORDER BY runs DESC LIMIT ${CAP}` },
+@@ -134,20 +218,40 @@ async function focusStudy(db: Db, acc: string): Promise<Graph> {
+      FROM samples s JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
+      WHERE r.study_accession = ? AND ${SA} AND s.organism IS NOT NULL
+      GROUP BY s.organism, s.tax_id ORDER BY n DESC LIMIT ${CAP}`
+   ).bind(acc).all<{ name: string; tax_id: number | null; n: number }>();
+   for (const row of organisms) {
+     const humanClass = classifyHuman(row.name, row.tax_id, null, tissueByOrganism.get(row.name) ?? []);
+     nodes.push(node("organism", row.name, row.name, { count: row.n, human_class: humanClass, link: linkFor("organism", row.name, row.name) }));
+     addEdge(edges, self.id, `organism:${row.name}`, "classifies", row.n);
+   }
+ 
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
++  await attachFacets(db, nodes, "sample", "s.biosample_accession");
++  await attachFacets(db, nodes, "organism", "s.organism");
++
++  // taxon lineage per organism (batched): organism → genus → family → phylum
++  const organismNodes = nodes.filter((n) => n.type === "organism");
++  if (organismNodes.length) {
++    const names = organismNodes.map((n) => n.id.slice("organism:".length)).slice(0, CAP);
++    const ph = names.map(() => "?").join(",");
++    const { results: lineage } = await db.prepare(
++      `SELECT s.organism AS name, t.genus, t.family, t.phylum
++       FROM samples s JOIN taxonomy t ON t.tax_id = s.tax_id
++       WHERE s.organism IN (${ph}) AND ${SA} GROUP BY s.organism, t.genus, t.family, t.phylum`
++    ).bind(...names).all<{ name: string; genus: string | null; family: string | null; phylum: string | null }>();
++    const byName = new Map<string, { genus: string | null; family: string | null; phylum: string | null }>();
++    for (const row of lineage) if (!byName.has(row.name)) byName.set(row.name, row);
++    for (const n of organismNodes) addTaxonChain(nodes, edges, n.id, byName.get(n.id.slice("organism:".length)));
++  }
++
+   await runAttributeNodes(db, "r.study_accession = ?", acc, self, edges, nodes);
+ 
+   const { results: terms } = await db.prepare(
+     `SELECT st.term_id, st.field, COUNT(*) AS n
+      FROM sample_terms st ${SAMPLES_RUNS}
+      JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
+      WHERE r.study_accession = ? AND ${SA} GROUP BY st.term_id, st.field LIMIT ${CAP}`
+   ).bind(acc).all<{ term_id: string; field: string; n: number }>();
+   for (const row of terms) {
+     nodes.push(node("term", row.term_id, row.term_id, { count: row.n }));
+@@ -186,20 +290,25 @@ async function focusSample(db: Db, acc: string): Promise<Graph> {
+   const { results: studies } = await db.prepare(
+     `SELECT r.study_accession AS accession, COUNT(*) AS runs
+      FROM ena_runs r ${SAMPLES_RUNS}
+      WHERE r.biosample_accession = ? AND ${SA} GROUP BY r.study_accession LIMIT ${CAP}`
+   ).bind(acc).all<{ accession: string; runs: number }>();
+   for (const row of studies) {
+     nodes.push(node("study", row.accession, row.accession, { count: row.runs, link: linkFor("study", row.accession, row.accession) }));
+     addEdge(edges, self.id, `study:${row.accession}`, "samples", row.runs);
+   }
+ 
++  await attachFacets(db, nodes, "sample", "s.biosample_accession");
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
++  await attachFacets(db, nodes, "organism", "s.organism");
++
+   await runAttributeNodes(db, "r.biosample_accession = ?", acc, self, edges, nodes);
+ 
+   const { results: terms } = await db.prepare(
+     `SELECT st.term_id, st.field, COUNT(*) AS n
+      FROM sample_terms st ${TERMS_SAMPLES}
+      WHERE s.biosample_accession = ? AND ${SA} GROUP BY st.term_id, st.field LIMIT ${CAP}`
+   ).bind(acc).all<{ term_id: string; field: string; n: number }>();
+   for (const row of terms) {
+     nodes.push(node("term", row.term_id, row.term_id, { count: row.n }));
+     addEdge(edges, self.id, `term:${row.term_id}`, "annotated_with", row.n);
+@@ -227,20 +336,33 @@ async function focusOrganism(db: Db, name: string): Promise<Graph> {
+   }
+   const { results: samples } = await db.prepare(
+     `SELECT s.biosample_accession AS accession, COUNT(*) AS n
+      FROM samples s JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
+      WHERE s.organism = ? AND ${SA} GROUP BY s.biosample_accession LIMIT ${CAP}`
+   ).bind(name).all<{ accession: string; n: number }>();
+   for (const row of samples) {
+     nodes.push(node("sample", row.accession, row.accession, { count: row.n, link: linkFor("sample", row.accession, row.accession) }));
+     addEdge(edges, self.id, `sample:${row.accession}`, "samples", row.n);
+   }
++
++  await attachFacets(db, nodes, "organism", "s.organism");
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
++  await attachFacets(db, nodes, "sample", "s.biosample_accession");
++
++  // taxon lineage: organism → genus → family → phylum (omit missing ranks)
++  const { results: lineage } = await db.prepare(
++    `SELECT t.genus, t.family, t.phylum FROM samples s
++     JOIN taxonomy t ON t.tax_id = s.tax_id
++     WHERE s.organism = ? AND ${SA} LIMIT 1`
++  ).bind(name).all<{ genus: string | null; family: string | null; phylum: string | null }>();
++  addTaxonChain(nodes, edges, self.id, lineage[0]);
+   return { nodes, edges };
+ }
+ 
+ // ---- platform / strategy / region focus ----
+ 
+ async function focusSimple(db: Db, type: "platform" | "strategy" | "region", name: string): Promise<Graph> {
+   const nodes: GraphNode[] = [];
+   const edges: GraphEdge[] = [];
+   const self = node(type, name, name, { link: linkFor(type, name, name) });
+   nodes.push(self);
+@@ -279,43 +401,74 @@ async function focusTerm(db: Db, termId: string): Promise<Graph> {
+      JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
+      WHERE st.term_id = ? AND ${SA} GROUP BY r.study_accession LIMIT ${CAP}`
+   ).bind(termId).all<{ accession: string; runs: number }>();
+   for (const row of studies) {
+     nodes.push(node("study", row.accession, row.accession, { count: row.runs, link: linkFor("study", row.accession, row.accession) }));
+     addEdge(edges, self.id, `study:${row.accession}`, "studies", row.runs);
+   }
+   return { nodes, edges };
+ }
+ 
++// ---- taxon focus ----
++
++async function focusTaxon(db: Db, id: string): Promise<Graph> {
++  const m = /^(genus|family|phylum):(.+)$/.exec(id);
++  const nodes: GraphNode[] = [];
++  const edges: GraphEdge[] = [];
++  if (!m) return { nodes, edges };
++  const [, rank, value] = m;
++  const self = node("taxon", id, value as string, {});
++  nodes.push(self);
++  // rank is validated against the regex capture, so t.${rank} is a fixed column
++  const { results: organisms } = await db.prepare(
++    `SELECT s.organism AS name, s.tax_id AS tax_id, COUNT(*) AS n
++     FROM samples s JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
++     JOIN taxonomy t ON t.tax_id = s.tax_id
++     WHERE t.${rank} = ? AND ${SA} AND s.organism IS NOT NULL
++     GROUP BY s.organism, s.tax_id ORDER BY n DESC LIMIT ${CAP}`
++  ).bind(value).all<{ name: string; tax_id: number | null; n: number }>();
++  for (const row of organisms) {
++    const cls = classifyHuman(row.name, row.tax_id, null, []);
++    nodes.push(node("organism", row.name, row.name, { count: row.n, human_class: cls, link: linkFor("organism", row.name, row.name) }));
++    addEdge(edges, self.id, `organism:${row.name}`, "classifies", row.n);
++  }
++  return { nodes, edges };
++}
++
+ // ---- submitter focus ----
+ 
+ async function focusSubmitter(db: Db, name: string): Promise<Graph> {
+   const nodes: GraphNode[] = [];
+   const edges: GraphEdge[] = [];
+   const self = node("submitter", name, name, { link: linkFor("submitter", name, name) });
+   nodes.push(self);
+   const { results: studies } = await db.prepare(
+     `SELECT st.accession, st.title, COUNT(*) AS runs
+      FROM studies st
+      JOIN submitters sub ON sub.id = st.submitter_id
+      JOIN ena_runs r ON r.study_accession = st.accession
+      ${SAMPLES_RUNS}
+      WHERE sub.center_name = ? AND ${SA} GROUP BY st.accession ORDER BY runs DESC LIMIT ${CAP}`
+   ).bind(name).all<{ accession: string; title: string | null; runs: number }>();
+   for (const row of studies) {
+     nodes.push(node("study", row.accession, row.title ?? row.accession, { count: row.runs, link: linkFor("study", row.accession, row.title ?? row.accession) }));
+     addEdge(edges, self.id, `study:${row.accession}`, "submitted", row.runs);
+   }
++  await attachFacets(db, nodes, "submitter", "sub.center_name",
++    "JOIN studies st ON st.accession = r.study_accession JOIN submitters sub ON sub.id = st.submitter_id");
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
+   return { nodes, edges };
+ }
+ 
+-const FOCUS_TYPES = new Set(["submitter", "study", "sample", "organism", "platform", "strategy", "region", "term"]);
++const FOCUS_TYPES = new Set(["submitter", "study", "sample", "organism", "taxon",
++  "genus", "family", "phylum", "platform", "strategy", "region", "term"]);
+ 
+ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
+   const url = new URL(request.url);
+   const focus = url.searchParams.get("focus");
+   if (!focus) {
+     try {
+       return await cachedJson(request, STATS_TTL, async () => json(await hubSubmitter(env.DB)));
+     } catch {
+       return json(
+         {
+@@ -334,20 +487,22 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
+     return json({ error: "invalid focus" }, 400);
+   }
+   try {
+     return await cachedJson(request, STATS_TTL, async () => {
+       let graph: Graph;
+       switch (type) {
+         case "submitter": graph = await focusSubmitter(env.DB, id); break;
+         case "study": graph = await focusStudy(env.DB, id); break;
+         case "sample": graph = await focusSample(env.DB, id); break;
+         case "organism": graph = await focusOrganism(env.DB, id); break;
++        case "taxon": graph = await focusTaxon(env.DB, id); break;
++        case "genus": case "family": case "phylum": graph = await focusTaxon(env.DB, `${type}:${id}`); break;
+         case "platform": case "strategy": case "region": graph = await focusSimple(env.DB, type, id); break;
+         default: graph = await focusTerm(env.DB, id); break;
+       }
+       return json(graph);
+     });
+   } catch {
+     return json(
+       {
+         error: "temporarily_unavailable",
+         message:
+diff --git a/functions/api/v2/graph/detail.test.ts b/functions/api/v2/graph/detail.test.ts
+new file mode 100644
+index 0000000..9308092
+--- /dev/null
++++ b/functions/api/v2/graph/detail.test.ts
+@@ -0,0 +1,182 @@
++import { describe, expect, it } from "vitest";
++import { onRequestGet } from "./detail";
++
++const store = new Map<string, Response>();
++globalThis.caches = {
++  default: {
++    async match(key: Request | string) {
++      const k = typeof key === "string" ? key : key.url;
++      const hit = store.get(k);
++      return hit ? new Response(hit.body, { status: hit.status, headers: hit.headers }) : undefined;
++    },
++    async put(key: Request | string, value: Response) {
++      store.set(typeof key === "string" ? key : key.url, value);
++    },
++  },
++} as never;
++
++// rows returned per SQL substring; the stub asserts Saudi scope the way D1 would
++function stubEnv(path: string) {
++  const prepared: string[] = [];
++  const ctx = {
++    request: new Request(path),
++    env: {
++      DB: {
++        prepare: (sql: string) => {
++          prepared.push(sql);
++          const all = async () => {
++            if (sql.includes("GROUP BY s.organism"))
++              return { results: [{ name: "Homo sapiens", runs: 3 }] };
++            if (sql.includes("COUNT(DISTINCT st.accession)"))
++              return { results: [{ name: "KAUST", studies: 1, runs: 3 }] };
++            if (sql.includes("FROM studies"))
++              return { results: [{ accession: "PRJNA1249945", title: "T", abstract: "A", submitter: "KAUST", date_min: "2020", date_max: "2024", samples: 2, runs: 3, bytes: 100 }] };
++            if (sql.includes("GROUP BY r.study_accession"))
++              return { results: [{ accession: "PRJNA1249945", runs: 2 }] };
++            if (sql.includes("SELECT DISTINCT r.platform"))
++              return { results: [{ name: "ILLUMINA" }] };
++            if (sql.includes("GROUP BY r.platform"))
++              return { results: [{ name: "ILLUMINA", runs: 3 }] };
++            if (sql.includes("st.field = 'tissue'"))
++              return { results: [{ term_id: "UBERON:0000059" }] };
++            if (sql.includes("COUNT(DISTINCT s.biosample_accession)"))
++              return { results: [{ samples: 2, runs: 3, label: "intestine" }] };
++            if (sql.includes("COUNT(DISTINCT r.study_accession)"))
++              return { results: [{ studies: 1, runs: 3, tax_id: 9606 }] };
++            if (sql.includes("COUNT(DISTINCT s.organism)"))
++              return { results: [{ organisms: 2, runs: 3 }] };
++            if (sql.includes("LEFT JOIN taxonomy"))
++              return { results: [{ accession: "SRS27212955", organism: "Homo sapiens", host: null, tissue: "lung", region: "Riyadh", collection_date: "2024-01-01", genus: "Homo", family: "Hominidae", phylum: "Chordata", runs: 2, bytes: 50 }] };
++            if (sql.includes("JOIN taxonomy t"))
++              return { results: [{ genus: "Homo", family: "Hominidae", phylum: "Chordata" }] };
++            return { results: [] };
++          };
++          return { bind: () => ({ all, first: async () => (await all()).results[0] ?? null }) };
++        },
++      },
++    },
++  } as never;
++  return { ctx, prepared };
++}
++
++const SA = "s.country = 'SA'";
++
++describe("GET /api/v2/graph/detail", () => {
++  it("study detail returns the inspector payload, Saudi-scoped", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph/detail?node=study:PRJNA1249945");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(200);
++    const body = (await res.json()) as {
++      accession: string; title: string; abstract: string; submitter: string;
++      date_min: string; date_max: string; samples: number; runs: number; bytes: number;
++      top_organisms: { name: string; runs: number }[]; platforms: string[];
++    };
++    expect(body.accession).toBe("PRJNA1249945");
++    expect(body.submitter).toBe("KAUST");
++    expect(body.samples).toBe(2);
++    expect(body.runs).toBe(3);
++    expect(body.top_organisms[0]).toEqual({ name: "Homo sapiens", runs: 3 });
++    expect(body.platforms).toEqual(["ILLUMINA"]);
++    for (const sql of prepared) expect(sql).toContain(SA);
++  });
++
++  it("sample detail returns lineage and run stats, Saudi-scoped", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph/detail?node=sample:SRS27212955&t=1");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(200);
++    const body = (await res.json()) as {
++      accession: string; organism: string; lineage: { genus: string; family: string; phylum: string };
++      host: string | null; tissue: string; region: string; collection_date: string;
++      runs: number; bytes: number; study: string;
++    };
++    expect(body.accession).toBe("SRS27212955");
++    expect(body.lineage).toEqual({ genus: "Homo", family: "Hominidae", phylum: "Chordata" });
++    expect(body.study).toBe("PRJNA1249945");
++    for (const sql of prepared) expect(sql).toContain(SA);
++  });
++
++  it("organism detail returns lineage and human class, Saudi-scoped", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph/detail?node=organism:Homo%20sapiens&t=2");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(200);
++    const body = (await res.json()) as {
++      name: string; lineage: { genus: string }; human_class: string; studies: number; runs: number;
++    };
++    expect(body.name).toBe("Homo sapiens");
++    expect(body.human_class).toBe("human");
++    expect(body.studies).toBe(1);
++    expect(body.runs).toBe(3);
++    for (const sql of prepared) expect(sql).toContain(SA);
++  });
++
++  it("submitter detail returns study/org aggregates, Saudi-scoped", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph/detail?node=submitter:KAUST&t=3");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(200);
++    const body = (await res.json()) as {
++      name: string; studies: number; runs: number; top_organisms: { name: string; runs: number }[];
++    };
++    expect(body.name).toBe("KAUST");
++    expect(body.studies).toBe(1);
++    expect(body.top_organisms[0]).toEqual({ name: "Homo sapiens", runs: 3 });
++    for (const sql of prepared) expect(sql).toContain(SA);
++  });
++
++  it("platform detail returns runs and top studies, Saudi-scoped", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph/detail?node=platform:ILLUMINA&t=4");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(200);
++    const body = (await res.json()) as {
++      name: string; runs: number; top_studies: { accession: string; runs: number }[];
++    };
++    expect(body.name).toBe("ILLUMINA");
++    expect(body.runs).toBe(3);
++    expect(body.top_studies[0]).toEqual({ accession: "PRJNA1249945", runs: 2 });
++    for (const sql of prepared) expect(sql).toContain(SA);
++  });
++
++  it("term detail returns label, counts and top studies, Saudi-scoped", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph/detail?node=term:UBERON:0000059&t=5");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(200);
++    const body = (await res.json()) as {
++      id: string; label: string; runs: number; samples: number;
++      top_studies: { accession: string; runs: number }[];
++    };
++    expect(body.id).toBe("UBERON:0000059");
++    expect(body.label).toBe("intestine");
++    expect(body.samples).toBe(2);
++    expect(body.top_studies[0]).toEqual({ accession: "PRJNA1249945", runs: 2 });
++    for (const sql of prepared) expect(sql).toContain(SA);
++  });
++
++  it("taxon detail returns rank-scoped aggregates, Saudi-scoped", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph/detail?node=taxon:genus:Camelus&t=6");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(200);
++    const body = (await res.json()) as { rank: string; name: string; organisms: number; runs: number };
++    expect(body.rank).toBe("genus");
++    expect(body.name).toBe("Camelus");
++    expect(body.organisms).toBe(2);
++    expect(body.runs).toBe(3);
++    for (const sql of prepared) expect(sql).toContain(SA);
++  });
++
++  it("rejects malformed node ids", async () => {
++    const { ctx } = stubEnv("http://x/api/v2/graph/detail?node=bogus&t=7");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(400);
++  });
++
++  it("rejects unknown node types", async () => {
++    const { ctx } = stubEnv("http://x/api/v2/graph/detail?node=foo:bar&t=8");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(400);
++  });
++
++  it("rejects taxon ids without a rank prefix", async () => {
++    const { ctx } = stubEnv("http://x/api/v2/graph/detail?node=taxon:bogus&t=9");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(400);
++  });
++});
+diff --git a/functions/api/v2/graph/detail.ts b/functions/api/v2/graph/detail.ts
+new file mode 100644
+index 0000000..1d0692d
+--- /dev/null
++++ b/functions/api/v2/graph/detail.ts
+@@ -0,0 +1,240 @@
++import { cachedJson, STATS_TTL } from "../../_lib/cache";
++import { Env, json } from "../../_lib/db";
++import { classifyHuman } from "../_lib/human";
++
++const SA = `s.country = 'SA'`;
++const SAMPLES_RUNS = `JOIN samples s ON s.biosample_accession = r.biosample_accession`;
++// for queries anchored at sample_terms (no ena_runs alias r in scope)
++const TERMS_SAMPLES = `JOIN samples s ON s.biosample_accession = st.biosample_accession`;
++
++const TOP = 5;
++
++type Db = D1Database;
++
++interface Lineage { genus: string | null; family: string | null; phylum: string | null }
++
++const notFound = (type: string, id: string) =>
++  json({ error: "not found", message: `${type} ${id} not found in Saudi scope.` }, 404);
++
++// ---- study: header + run stats + top organisms/platforms ----
++
++async function studyDetail(db: Db, acc: string) {
++  const row = await db.prepare(
++    `SELECT st.accession, st.title, st.abstract, sub.center_name AS submitter,
++            MIN(r.submitted_date) AS date_min, MAX(r.submitted_date) AS date_max,
++            COUNT(DISTINCT r.biosample_accession) AS samples, COUNT(*) AS runs,
++            COALESCE(SUM(r.bytes), 0) AS bytes
++     FROM studies st
++     LEFT JOIN submitters sub ON sub.id = st.submitter_id
++     JOIN ena_runs r ON r.study_accession = st.accession
++     ${SAMPLES_RUNS}
++     WHERE st.accession = ? AND ${SA}`
++  ).bind(acc).first<{
++    accession: string; title: string | null; abstract: string | null; submitter: string | null;
++    date_min: string | null; date_max: string | null; samples: number; runs: number; bytes: number;
++  }>();
++  if (!row) return null;
++  const { results: orgs } = await db.prepare(
++    `SELECT s.organism AS name, COUNT(*) AS runs
++     FROM ena_runs r ${SAMPLES_RUNS}
++     WHERE r.study_accession = ? AND ${SA} AND s.organism IS NOT NULL
++     GROUP BY s.organism ORDER BY runs DESC LIMIT ${TOP}`
++  ).bind(acc).all<{ name: string; runs: number }>();
++  const { results: plats } = await db.prepare(
++    `SELECT DISTINCT r.platform AS name FROM ena_runs r ${SAMPLES_RUNS}
++     WHERE r.study_accession = ? AND ${SA} AND r.platform IS NOT NULL LIMIT ${TOP}`
++  ).bind(acc).all<{ name: string }>();
++  return { ...row, bytes: Number(row.bytes), top_organisms: orgs, platforms: plats.map((p) => p.name) };
++}
++
++// ---- sample: sample row + lineage + primary study + run stats ----
++
++async function sampleDetail(db: Db, acc: string) {
++  const row = await db.prepare(
++    `SELECT s.biosample_accession AS accession, s.organism, s.host, s.tissue,
++            s.region, s.collection_date,
++            t.genus, t.family, t.phylum,
++            COUNT(*) AS runs, COALESCE(SUM(r.bytes), 0) AS bytes
++     FROM samples s
++     LEFT JOIN taxonomy t ON t.tax_id = s.tax_id
++     JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
++     WHERE s.biosample_accession = ? AND ${SA}
++     GROUP BY s.biosample_accession`
++  ).bind(acc).first<{
++    accession: string; organism: string | null; host: string | null; tissue: string | null;
++    region: string | null; collection_date: string | null;
++    genus: string | null; family: string | null; phylum: string | null;
++    runs: number; bytes: number;
++  }>();
++  if (!row) return null;
++  // primary study: the one carrying most of this sample's Saudi runs
++  const study = await db.prepare(
++    `SELECT r.study_accession AS accession, COUNT(*) AS runs
++     FROM ena_runs r ${SAMPLES_RUNS}
++     WHERE r.biosample_accession = ? AND ${SA}
++     GROUP BY r.study_accession ORDER BY runs DESC LIMIT 1`
++  ).bind(acc).first<{ accession: string }>();
++  const { genus, family, phylum, ...rest } = row;
++  return {
++    ...rest,
++    bytes: Number(rest.bytes),
++    lineage: { genus, family, phylum } satisfies Lineage,
++    study: study?.accession ?? null,
++  };
++}
++
++// ---- organism: aggregates + lineage + human classification ----
++
++async function organismDetail(db: Db, name: string) {
++  const agg = await db.prepare(
++    `SELECT COUNT(DISTINCT r.study_accession) AS studies, COUNT(*) AS runs,
++            MAX(s.tax_id) AS tax_id
++     FROM ena_runs r ${SAMPLES_RUNS}
++     WHERE s.organism = ? AND ${SA}`
++  ).bind(name).first<{ studies: number; runs: number; tax_id: number | null }>();
++  if (!agg || !agg.runs) return null;
++  const { results: lineage } = await db.prepare(
++    `SELECT t.genus, t.family, t.phylum
++     FROM samples s JOIN taxonomy t ON t.tax_id = s.tax_id
++     WHERE s.organism = ? AND ${SA} LIMIT 1`
++  ).bind(name).all<{ genus: string | null; family: string | null; phylum: string | null }>();
++  // tissue terms feed classifyHuman's human_associated rule, as in the graph focus
++  const { results: tissue } = await db.prepare(
++    `SELECT st.term_id FROM sample_terms st ${TERMS_SAMPLES}
++     WHERE s.organism = ? AND ${SA} AND st.field = 'tissue'`
++  ).bind(name).all<{ term_id: string }>();
++  const lin = lineage[0];
++  return {
++    name,
++    lineage: {
++      genus: lin?.genus ?? null,
++      family: lin?.family ?? null,
++      phylum: lin?.phylum ?? null,
++    } satisfies Lineage,
++    human_class: classifyHuman(name, agg.tax_id, null, tissue.map((t) => t.term_id)),
++    studies: agg.studies,
++    runs: agg.runs,
++  };
++}
++
++// ---- submitter: study/run aggregates + top organisms ----
++
++async function submitterDetail(db: Db, name: string) {
++  const agg = await db.prepare(
++    `SELECT sub.center_name AS name, COUNT(DISTINCT st.accession) AS studies, COUNT(*) AS runs
++     FROM ena_runs r ${SAMPLES_RUNS}
++     JOIN studies st ON st.accession = r.study_accession
++     JOIN submitters sub ON sub.id = st.submitter_id
++     WHERE sub.center_name = ? AND ${SA}
++     GROUP BY sub.center_name`
++  ).bind(name).first<{ name: string; studies: number; runs: number }>();
++  if (!agg) return null;
++  const { results: orgs } = await db.prepare(
++    `SELECT s.organism AS name, COUNT(*) AS runs
++     FROM ena_runs r ${SAMPLES_RUNS}
++     JOIN studies st ON st.accession = r.study_accession
++     JOIN submitters sub ON sub.id = st.submitter_id
++     WHERE sub.center_name = ? AND ${SA} AND s.organism IS NOT NULL
++     GROUP BY s.organism ORDER BY runs DESC LIMIT ${TOP}`
++  ).bind(name).all<{ name: string; runs: number }>();
++  return { name: agg.name, studies: agg.studies, runs: agg.runs, top_organisms: orgs };
++}
++
++// ---- platform / strategy / region: runs + top studies ----
++
++async function attributeDetail(db: Db, type: "platform" | "strategy" | "region", name: string) {
++  const column = type === "platform" ? "r.platform" : type === "strategy" ? "r.library_strategy" : "s.region";
++  const agg = await db.prepare(
++    `SELECT ${column} AS name, COUNT(*) AS runs
++     FROM ena_runs r ${SAMPLES_RUNS}
++     WHERE ${column} = ? AND ${SA}
++     GROUP BY ${column}`
++  ).bind(name).first<{ name: string; runs: number }>();
++  if (!agg) return null;
++  const { results: studies } = await db.prepare(
++    `SELECT r.study_accession AS accession, COUNT(*) AS runs
++     FROM ena_runs r ${SAMPLES_RUNS}
++     WHERE ${column} = ? AND ${SA}
++     GROUP BY r.study_accession ORDER BY runs DESC LIMIT ${TOP}`
++  ).bind(name).all<{ accession: string; runs: number }>();
++  return { name: agg.name, runs: agg.runs, top_studies: studies };
++}
++
++// ---- term: label + Saudi run/sample counts + top studies ----
++
++async function termDetail(db: Db, termId: string) {
++  // the ontology label rides along as a scalar subquery: ontology_terms is keyed
++  // by (field, value_norm), so a plain join on term_id would multiply rows and
++  // inflate the DISTINCT counts.
++  const agg = await db.prepare(
++    `SELECT COUNT(DISTINCT s.biosample_accession) AS samples,
++            COUNT(DISTINCT r.run_accession) AS runs,
++            (SELECT label FROM ontology_terms ot WHERE ot.term_id = st.term_id LIMIT 1) AS label
++     FROM sample_terms st ${TERMS_SAMPLES}
++     JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
++     WHERE st.term_id = ? AND ${SA}`
++  ).bind(termId).first<{ samples: number; runs: number; label: string | null }>();
++  if (!agg || !agg.runs) return null;
++  const { results: studies } = await db.prepare(
++    `SELECT r.study_accession AS accession, COUNT(DISTINCT r.run_accession) AS runs
++     FROM sample_terms st ${TERMS_SAMPLES}
++     JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
++     WHERE st.term_id = ? AND ${SA}
++     GROUP BY r.study_accession ORDER BY runs DESC LIMIT ${TOP}`
++  ).bind(termId).all<{ accession: string; runs: number }>();
++  return { id: termId, label: agg.label ?? termId, runs: agg.runs, samples: agg.samples, top_studies: studies };
++}
++
++// ---- taxon: rank-scoped organism/run aggregates ----
++
++async function taxonDetail(db: Db, id: string) {
++  const m = /^(genus|family|phylum):(.+)$/.exec(id);
++  if (!m) return null;
++  const [, rank, value] = m;
++  // rank is validated against the regex capture, so t.${rank} is a fixed column
++  const agg = await db.prepare(
++    `SELECT COUNT(DISTINCT s.organism) AS organisms, COUNT(*) AS runs
++     FROM ena_runs r ${SAMPLES_RUNS}
++     JOIN taxonomy t ON t.tax_id = s.tax_id
++     WHERE t.${rank} = ? AND ${SA}`
++  ).bind(value).first<{ organisms: number; runs: number }>();
++  if (!agg || !agg.runs) return null;
++  return { rank, name: value, organisms: agg.organisms, runs: agg.runs };
++}
++
++const TYPES = new Set(["study", "sample", "organism", "submitter", "platform", "strategy", "region", "term", "taxon"]);
++
++export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
++  const url = new URL(request.url);
++  const m = /^([^:]+):([\s\S]+)$/.exec(url.searchParams.get("node") ?? "");
++  const type = m?.[1];
++  const id = m?.[2];
++  if (!type || !id || !TYPES.has(type) || (type === "taxon" && !/^(genus|family|phylum):/.test(id))) {
++    return json({ error: "invalid node" }, 400);
++  }
++  try {
++    return await cachedJson(request, STATS_TTL, async () => {
++      let payload: unknown = null;
++      switch (type) {
++        case "study": payload = await studyDetail(env.DB, id); break;
++        case "sample": payload = await sampleDetail(env.DB, id); break;
++        case "organism": payload = await organismDetail(env.DB, id); break;
++        case "submitter": payload = await submitterDetail(env.DB, id); break;
++        case "platform": case "strategy": case "region": payload = await attributeDetail(env.DB, type, id); break;
++        case "term": payload = await termDetail(env.DB, id); break;
++        default: payload = await taxonDetail(env.DB, id); break;
++      }
++      if (payload === null) return notFound(type, id);
++      return json(payload);
++    });
++  } catch {
++    return json(
++      {
++        error: "temporarily_unavailable",
++        message:
++          "Graph detail is temporarily unavailable (daily database quota). Retry in a few minutes.",
++      },
++      503
++    );
++  }
++};

@@ -1,0 +1,482 @@
+# Review package: 7da3257..HEAD
+
+## Commits
+791a3e1 feat(graph): node facets (domain/platforms/years/recent), taxon focus + lineage, study search filter
+
+## Files changed
+ functions/api/v2/_lib/filters.ts |   1 +
+ functions/api/v2/filters.test.ts |   7 ++
+ functions/api/v2/graph.test.ts   |  28 +++++++
+ functions/api/v2/graph.ts        | 159 ++++++++++++++++++++++++++++++++++++++-
+ 4 files changed, 193 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/functions/api/v2/_lib/filters.ts b/functions/api/v2/_lib/filters.ts
+index 96bbefd..78ed388 100644
+--- a/functions/api/v2/_lib/filters.ts
++++ b/functions/api/v2/_lib/filters.ts
+@@ -25,20 +25,21 @@ export function parseV2Filters(url: URL): V2Where {
+       params.push(v);
+     }
+   };
+   eq("s.organism", p.get("organism"));
+   eq("s.country", p.get("country"));
+   eq("s.region", p.get("region"));
+   eq("s.host", p.get("host"));
+   eq("r.platform", p.get("platform"));
+   eq("r.library_strategy", p.get("strategy"));
+   eq("sub.center_name", p.get("submitter"));
++  eq("r.study_accession", p.get("study"));
+   const from = p.get("from");
+   if (from) {
+     conds.push("r.submitted_date >= ?");
+     params.push(from);
+   }
+   const to = p.get("to");
+   if (to) {
+     conds.push("r.submitted_date <= ?");
+     params.push(`${to}~`);
+   }
+diff --git a/functions/api/v2/filters.test.ts b/functions/api/v2/filters.test.ts
+index 0455252..0fc817e 100644
+--- a/functions/api/v2/filters.test.ts
++++ b/functions/api/v2/filters.test.ts
+@@ -20,11 +20,18 @@ describe("parseV2Filters", () => {
+     const { clause, params } = parseV2Filters(new URL("http://x/api/v2/search?page=2"));
+     expect(clause).toBe(" WHERE s.country = 'SA'");
+     expect(params).toEqual([]);
+   });
+ 
+   it("a contradictory non-Saudi country param yields an empty result, not a leak", () => {
+     const { clause } = parseV2Filters(new URL("http://x/api/v2/search?country=QA"));
+     expect(clause).toContain("s.country = 'SA'");
+     expect(clause).toContain("s.country = ?");
+   });
++
++  it("study param adds an equality filter on r.study_accession", () => {
++    const { clause, params } = parseV2Filters(new URL("https://x/v2/search?study=PRJNA1249945"));
++    expect(clause).toContain("r.study_accession = ?");
++    expect(clause).toContain("s.country = 'SA'");
++    expect(params).toContain("PRJNA1249945");
++  });
+ });
+diff --git a/functions/api/v2/graph.test.ts b/functions/api/v2/graph.test.ts
+index 17596ac..d8f7773 100644
+--- a/functions/api/v2/graph.test.ts
++++ b/functions/api/v2/graph.test.ts
+@@ -18,20 +18,26 @@ globalThis.caches = {
+ // rows returned per SQL substring; the stub asserts Saudi scope the way D1 would
+ function stubEnv(path: string) {
+   const prepared: string[] = [];
+   const ctx = {
+     request: new Request(path),
+     env: {
+       DB: {
+         prepare: (sql: string) => {
+           prepared.push(sql);
+           const all = async () => {
++            if (sql.includes("MIN(CAST(substr") || sql.includes("GROUP_CONCAT"))
++              return { results: [{ id: "PRJNA1249945", y0: 2023, y1: 2024, recent: 1, platforms: "ILLUMINA", organism: "Homo sapiens", tax_id: 9606, host: null }] };
++            if (sql.includes("JOIN taxonomy t") && !sql.includes("ena_runs"))
++              return { results: [{ name: "Homo sapiens", genus: "Homo", family: "Hominidae", phylum: "Chordata" }] };
++            if (sql.includes("JOIN taxonomy t"))
++              return { results: [{ name: "Camelus dromedarius", tax_id: 9838, n: 2 }] };
+             if (sql.includes("submitters") && sql.includes("GROUP BY"))
+               return { results: [{ name: "KAUST", runs: 10 }] };
+             if (sql.includes("FROM studies"))
+               return { results: [{ accession: "PRJNA1249945", title: "Camel Microbiome", runs: 4 }] };
+             if (sql.includes("FROM samples") && sql.includes("organism"))
+               return { results: [{ name: "Homo sapiens", tax_id: 9606, n: 1 }] };
+             if (sql.includes("sample_terms"))
+               return { results: [{ term_id: "UBERON:0000059", field: "tissue" }] };
+             return { results: [] };
+           };
+@@ -86,16 +92,38 @@ describe("GET /api/v2/graph", () => {
+     }
+   });
+ 
+   it("sample focus returns 200 with Saudi scope", async () => {
+     const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=sample:SRS27212955&t=4");
+     const res = await onRequestGet(ctx);
+     expect(res.status).toBe(200);
+     for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
+   });
+ 
++  it("study focus nodes carry facets and taxon lineage", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=study:PRJNA1249945&t=9");
++    const res = await onRequestGet(ctx);
++    const body = (await res.json()) as {
++      nodes: { type: string; facets?: { domain?: string; years?: number[]; platforms?: string[] }; recent?: boolean }[];
++    };
++    const study = body.nodes.find((n) => n.type === "study");
++    expect(study?.facets?.domain).toBeDefined();
++    expect(study?.facets?.years?.length).toBe(2);
++    expect(body.nodes.some((n) => n.type === "taxon")).toBe(true);
++    for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
++  });
++
++  it("taxon focus returns child organisms", async () => {
++    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=genus:Camelus&t=10");
++    const res = await onRequestGet(ctx);
++    expect(res.status).toBe(200);
++    const body = (await res.json()) as { nodes: { type: string }[] };
++    expect(body.nodes.some((n) => n.type === "organism")).toBe(true);
++    for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
++  });
++
+   it("rejects a malformed focus", async () => {
+     const { ctx } = stubEnv("http://x/api/v2/graph?focus=bogus&t=2");
+     const res = await onRequestGet(ctx);
+     expect(res.status).toBe(400);
+   });
+ });
+diff --git a/functions/api/v2/graph.ts b/functions/api/v2/graph.ts
+index 7b78824..62fd993 100644
+--- a/functions/api/v2/graph.ts
++++ b/functions/api/v2/graph.ts
+@@ -1,18 +1,20 @@
+ import { cachedJson, STATS_TTL } from "../_lib/cache";
+ import { Env, json } from "../_lib/db";
+ import { classifyHuman, HumanClass } from "./_lib/human";
+ 
+ type NodeType = "submitter" | "study" | "sample" | "organism" | "taxon"
+   | "platform" | "strategy" | "region" | "publication" | "term";
+ interface GraphNode { id: string; type: NodeType; label: string; count?: number;
+-  human_class?: HumanClass; link?: string | null }
++  human_class?: HumanClass;
++  facets?: { domain?: HumanClass; region?: string; platforms?: string[]; years?: [number, number] };
++  recent?: boolean; link?: string | null }
+ interface GraphEdge { source: string; target: string; kind: string; count?: number }
+ interface Graph { nodes: GraphNode[]; edges: GraphEdge[] }
+ 
+ const CAP = 50;
+ const SA = `s.country = 'SA'`;
+ const SAMPLES_RUNS = `JOIN samples s ON s.biosample_accession = r.biosample_accession`;
+ // for queries anchored at sample_terms (no ena_runs alias r in scope)
+ const TERMS_SAMPLES = `JOIN samples s ON s.biosample_accession = st.biosample_accession`;
+ 
+ type Db = D1Database;
+@@ -31,20 +33,98 @@ function linkFor(type: NodeType, key: string, label: string): string | null | un
+     case "study": return `/study?id=${encodeURIComponent(key)}`;
+     case "sample": return `/search?q=${encodeURIComponent(key)}`;
+     case "organism": return `/search?organism=${encodeURIComponent(key)}`;
+     case "platform": return `/search?platform=${encodeURIComponent(key)}`;
+     case "strategy": return `/search?strategy=${encodeURIComponent(key)}`;
+     case "region": return `/search?region=${encodeURIComponent(key)}`;
+     default: return undefined;
+   }
+ }
+ 
++// ---- node facets: domain / platforms / years / recent, batched per scope ----
++
++interface FacetRow { id: string; y0: number | null; y1: number | null; recent: number; platforms: string | null; organism: string | null; tax_id: number | null; host: string | null; }
++
++type NodeFacets = NonNullable<GraphNode["facets"]> & { recent: boolean };
++
++// Batched per-node facets over the ids already at hand (IN-list capped by CAP);
++// `joinSql` adds the minimal dim joins the scope column needs beyond
++// ena_runs+samples (studies for st.accession, studies+submitters for sub.center_name).
++async function scopeFacets(db: Db, scopeCol: string, ids: string[], joinSql = ""): Promise<Map<string, NodeFacets>> {
++  if (!ids.length) return new Map();
++  const ph = ids.map(() => "?").join(",");
++  const { results } = await db.prepare(
++    `SELECT ${scopeCol} AS id,
++            MIN(CAST(substr(r.submitted_date, 1, 4) AS INTEGER)) AS y0,
++            MAX(CAST(substr(r.submitted_date, 1, 4) AS INTEGER)) AS y1,
++            MAX(CASE WHEN r.submitted_date >= date('now', '-180 days') THEN 1 ELSE 0 END) AS recent,
++            GROUP_CONCAT(DISTINCT r.platform) AS platforms,
++            s.organism AS organism, s.tax_id AS tax_id, s.host AS host
++     FROM ena_runs r ${SAMPLES_RUNS} ${joinSql}
++     WHERE ${scopeCol} IN (${ph}) AND ${SA}
++     GROUP BY ${scopeCol}, s.organism, s.tax_id, s.host`
++  ).bind(...ids).all<FacetRow>();
++  const out = new Map<string, NodeFacets>();
++  for (const row of results) {
++    const cur = out.get(row.id) ?? { recent: false };
++    if (row.y0 != null) cur.years = [Math.min(cur.years?.[0] ?? row.y0, row.y0), Math.max(cur.years?.[1] ?? row.y1 ?? row.y0, row.y1 ?? row.y0)] as [number, number];
++    if (row.recent) cur.recent = true;
++    if (row.platforms) cur.platforms = [...new Set([...(cur.platforms ?? []), ...row.platforms.split(",")])].slice(0, 5);
++    // domain aggregation: human > human_associated > other. Tissue terms are
++    // intentionally omitted at group scope — name/tax_id/host carry the common
++    // cases; keep classifyHuman as the only classification rule source.
++    const cls = classifyHuman(row.organism, row.tax_id, row.host, []);
++    const rank = { other: 0, human_associated: 1, human: 2 } as const;
++    if (!cur.domain || rank[cls] > rank[cur.domain as keyof typeof rank]) cur.domain = cls;
++    out.set(row.id, cur);
++  }
++  return out;
++}
++
++async function attachFacets(db: Db, nodes: GraphNode[], type: NodeType, scopeCol: string, joinSql = "") {
++  const ofType = nodes.filter((n) => n.type === type);
++  if (!ofType.length) return;
++  const ids = ofType.map((n) => n.id.slice(n.type.length + 1)).slice(0, CAP);
++  const facets = await scopeFacets(db, scopeCol, ids, joinSql);
++  for (const n of ofType) {
++    const f = facets.get(n.id.slice(n.type.length + 1));
++    if (!f) continue;
++    const { recent, ...rest } = f;
++    n.facets = rest;
++    n.recent = recent;
++  }
++}
++
++// taxon lineage chain: organism → genus:<g> → family:<f> → phylum:<p>,
++// omitting ranks the taxonomy table has no value for.
++function addTaxonChain(
++  nodes: GraphNode[], edges: GraphEdge[], childId: string,
++  lineage: { genus?: string | null; family?: string | null; phylum?: string | null } | undefined,
++) {
++  if (!lineage) return;
++  const ranks: { rank: string; value: string | null | undefined }[] = [
++    { rank: "genus", value: lineage.genus },
++    { rank: "family", value: lineage.family },
++    { rank: "phylum", value: lineage.phylum },
++  ];
++  let cur = childId;
++  for (const { rank, value } of ranks) {
++    if (!value) continue;
++    const id = `taxon:${rank}:${value}`;
++    if (!nodes.some((n) => n.id === id))
++      nodes.push(node("taxon", `${rank}:${value}`, value, { link: linkFor("taxon", `${rank}:${value}`, value) }));
++    if (!edges.some((e) => e.source === cur && e.target === id && e.kind === "classified_in"))
++      addEdge(edges, cur, id, "classified_in");
++    cur = id;
++  }
++}
++
+ // ---- default hub: top Saudi submitters and their studies ----
+ 
+ async function hubSubmitter(db: Db): Promise<Graph> {
+   const nodes: GraphNode[] = [];
+   const edges: GraphEdge[] = [];
+   const submitters = await db.prepare(
+     `SELECT sub.center_name AS name, COUNT(*) AS runs
+      FROM ena_runs r ${SAMPLES_RUNS}
+      JOIN studies st ON st.accession = r.study_accession
+      JOIN submitters sub ON sub.id = st.submitter_id
+@@ -60,20 +140,24 @@ async function hubSubmitter(db: Db): Promise<Graph> {
+        JOIN ena_runs r ON r.study_accession = st.accession
+        ${SAMPLES_RUNS}
+        WHERE sub.center_name = ? AND ${SA}
+        GROUP BY st.accession ORDER BY runs DESC LIMIT 10`
+     ).bind(sub.name).all<{ accession: string; title: string | null; runs: number }>();
+     for (const st of studies.results) {
+       nodes.push(node("study", st.accession, st.title ?? st.accession, { count: st.runs, link: linkFor("study", st.accession, st.title ?? st.accession) }));
+       addEdge(edges, subId, `study:${st.accession}`, "submitted", st.runs);
+     }
+   }
++  await attachFacets(db, nodes, "submitter", "sub.center_name",
++    "JOIN studies st ON st.accession = r.study_accession JOIN submitters sub ON sub.id = st.submitter_id");
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
+   return { nodes, edges };
+ }
+ 
+ // ---- shared run-attribute neighbors (platform / strategy / region) ----
+ 
+ async function runAttributeNodes(
+   db: Db, scopeSql: string, scopeParam: string, self: GraphNode, edges: GraphEdge[], nodes: GraphNode[]
+ ) {
+   const attrs: { type: NodeType; sql: string }[] = [
+     { type: "platform", sql: `SELECT r.platform AS name, COUNT(*) AS runs FROM ena_runs r ${SAMPLES_RUNS} WHERE ${scopeSql} AND ${SA} AND r.platform IS NOT NULL GROUP BY r.platform ORDER BY runs DESC LIMIT ${CAP}` },
+@@ -134,20 +218,40 @@ async function focusStudy(db: Db, acc: string): Promise<Graph> {
+      FROM samples s JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
+      WHERE r.study_accession = ? AND ${SA} AND s.organism IS NOT NULL
+      GROUP BY s.organism, s.tax_id ORDER BY n DESC LIMIT ${CAP}`
+   ).bind(acc).all<{ name: string; tax_id: number | null; n: number }>();
+   for (const row of organisms) {
+     const humanClass = classifyHuman(row.name, row.tax_id, null, tissueByOrganism.get(row.name) ?? []);
+     nodes.push(node("organism", row.name, row.name, { count: row.n, human_class: humanClass, link: linkFor("organism", row.name, row.name) }));
+     addEdge(edges, self.id, `organism:${row.name}`, "classifies", row.n);
+   }
+ 
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
++  await attachFacets(db, nodes, "sample", "s.biosample_accession");
++  await attachFacets(db, nodes, "organism", "s.organism");
++
++  // taxon lineage per organism (batched): organism → genus → family → phylum
++  const organismNodes = nodes.filter((n) => n.type === "organism");
++  if (organismNodes.length) {
++    const names = organismNodes.map((n) => n.id.slice("organism:".length)).slice(0, CAP);
++    const ph = names.map(() => "?").join(",");
++    const { results: lineage } = await db.prepare(
++      `SELECT s.organism AS name, t.genus, t.family, t.phylum
++       FROM samples s JOIN taxonomy t ON t.tax_id = s.tax_id
++       WHERE s.organism IN (${ph}) AND ${SA} GROUP BY s.organism, t.genus, t.family, t.phylum`
++    ).bind(...names).all<{ name: string; genus: string | null; family: string | null; phylum: string | null }>();
++    const byName = new Map<string, { genus: string | null; family: string | null; phylum: string | null }>();
++    for (const row of lineage) if (!byName.has(row.name)) byName.set(row.name, row);
++    for (const n of organismNodes) addTaxonChain(nodes, edges, n.id, byName.get(n.id.slice("organism:".length)));
++  }
++
+   await runAttributeNodes(db, "r.study_accession = ?", acc, self, edges, nodes);
+ 
+   const { results: terms } = await db.prepare(
+     `SELECT st.term_id, st.field, COUNT(*) AS n
+      FROM sample_terms st ${SAMPLES_RUNS}
+      JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
+      WHERE r.study_accession = ? AND ${SA} GROUP BY st.term_id, st.field LIMIT ${CAP}`
+   ).bind(acc).all<{ term_id: string; field: string; n: number }>();
+   for (const row of terms) {
+     nodes.push(node("term", row.term_id, row.term_id, { count: row.n }));
+@@ -186,20 +290,25 @@ async function focusSample(db: Db, acc: string): Promise<Graph> {
+   const { results: studies } = await db.prepare(
+     `SELECT r.study_accession AS accession, COUNT(*) AS runs
+      FROM ena_runs r ${SAMPLES_RUNS}
+      WHERE r.biosample_accession = ? AND ${SA} GROUP BY r.study_accession LIMIT ${CAP}`
+   ).bind(acc).all<{ accession: string; runs: number }>();
+   for (const row of studies) {
+     nodes.push(node("study", row.accession, row.accession, { count: row.runs, link: linkFor("study", row.accession, row.accession) }));
+     addEdge(edges, self.id, `study:${row.accession}`, "samples", row.runs);
+   }
+ 
++  await attachFacets(db, nodes, "sample", "s.biosample_accession");
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
++  await attachFacets(db, nodes, "organism", "s.organism");
++
+   await runAttributeNodes(db, "r.biosample_accession = ?", acc, self, edges, nodes);
+ 
+   const { results: terms } = await db.prepare(
+     `SELECT st.term_id, st.field, COUNT(*) AS n
+      FROM sample_terms st ${TERMS_SAMPLES}
+      WHERE s.biosample_accession = ? AND ${SA} GROUP BY st.term_id, st.field LIMIT ${CAP}`
+   ).bind(acc).all<{ term_id: string; field: string; n: number }>();
+   for (const row of terms) {
+     nodes.push(node("term", row.term_id, row.term_id, { count: row.n }));
+     addEdge(edges, self.id, `term:${row.term_id}`, "annotated_with", row.n);
+@@ -227,20 +336,33 @@ async function focusOrganism(db: Db, name: string): Promise<Graph> {
+   }
+   const { results: samples } = await db.prepare(
+     `SELECT s.biosample_accession AS accession, COUNT(*) AS n
+      FROM samples s JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
+      WHERE s.organism = ? AND ${SA} GROUP BY s.biosample_accession LIMIT ${CAP}`
+   ).bind(name).all<{ accession: string; n: number }>();
+   for (const row of samples) {
+     nodes.push(node("sample", row.accession, row.accession, { count: row.n, link: linkFor("sample", row.accession, row.accession) }));
+     addEdge(edges, self.id, `sample:${row.accession}`, "samples", row.n);
+   }
++
++  await attachFacets(db, nodes, "organism", "s.organism");
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
++  await attachFacets(db, nodes, "sample", "s.biosample_accession");
++
++  // taxon lineage: organism → genus → family → phylum (omit missing ranks)
++  const { results: lineage } = await db.prepare(
++    `SELECT t.genus, t.family, t.phylum FROM samples s
++     JOIN taxonomy t ON t.tax_id = s.tax_id
++     WHERE s.organism = ? AND ${SA} LIMIT 1`
++  ).bind(name).all<{ genus: string | null; family: string | null; phylum: string | null }>();
++  addTaxonChain(nodes, edges, self.id, lineage[0]);
+   return { nodes, edges };
+ }
+ 
+ // ---- platform / strategy / region focus ----
+ 
+ async function focusSimple(db: Db, type: "platform" | "strategy" | "region", name: string): Promise<Graph> {
+   const nodes: GraphNode[] = [];
+   const edges: GraphEdge[] = [];
+   const self = node(type, name, name, { link: linkFor(type, name, name) });
+   nodes.push(self);
+@@ -279,43 +401,74 @@ async function focusTerm(db: Db, termId: string): Promise<Graph> {
+      JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
+      WHERE st.term_id = ? AND ${SA} GROUP BY r.study_accession LIMIT ${CAP}`
+   ).bind(termId).all<{ accession: string; runs: number }>();
+   for (const row of studies) {
+     nodes.push(node("study", row.accession, row.accession, { count: row.runs, link: linkFor("study", row.accession, row.accession) }));
+     addEdge(edges, self.id, `study:${row.accession}`, "studies", row.runs);
+   }
+   return { nodes, edges };
+ }
+ 
++// ---- taxon focus ----
++
++async function focusTaxon(db: Db, id: string): Promise<Graph> {
++  const m = /^(genus|family|phylum):(.+)$/.exec(id);
++  const nodes: GraphNode[] = [];
++  const edges: GraphEdge[] = [];
++  if (!m) return { nodes, edges };
++  const [, rank, value] = m;
++  const self = node("taxon", id, value as string, {});
++  nodes.push(self);
++  // rank is validated against the regex capture, so t.${rank} is a fixed column
++  const { results: organisms } = await db.prepare(
++    `SELECT s.organism AS name, s.tax_id AS tax_id, COUNT(*) AS n
++     FROM samples s JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
++     JOIN taxonomy t ON t.tax_id = s.tax_id
++     WHERE t.${rank} = ? AND ${SA} AND s.organism IS NOT NULL
++     GROUP BY s.organism, s.tax_id ORDER BY n DESC LIMIT ${CAP}`
++  ).bind(value).all<{ name: string; tax_id: number | null; n: number }>();
++  for (const row of organisms) {
++    const cls = classifyHuman(row.name, row.tax_id, null, []);
++    nodes.push(node("organism", row.name, row.name, { count: row.n, human_class: cls, link: linkFor("organism", row.name, row.name) }));
++    addEdge(edges, self.id, `organism:${row.name}`, "classifies", row.n);
++  }
++  return { nodes, edges };
++}
++
+ // ---- submitter focus ----
+ 
+ async function focusSubmitter(db: Db, name: string): Promise<Graph> {
+   const nodes: GraphNode[] = [];
+   const edges: GraphEdge[] = [];
+   const self = node("submitter", name, name, { link: linkFor("submitter", name, name) });
+   nodes.push(self);
+   const { results: studies } = await db.prepare(
+     `SELECT st.accession, st.title, COUNT(*) AS runs
+      FROM studies st
+      JOIN submitters sub ON sub.id = st.submitter_id
+      JOIN ena_runs r ON r.study_accession = st.accession
+      ${SAMPLES_RUNS}
+      WHERE sub.center_name = ? AND ${SA} GROUP BY st.accession ORDER BY runs DESC LIMIT ${CAP}`
+   ).bind(name).all<{ accession: string; title: string | null; runs: number }>();
+   for (const row of studies) {
+     nodes.push(node("study", row.accession, row.title ?? row.accession, { count: row.runs, link: linkFor("study", row.accession, row.title ?? row.accession) }));
+     addEdge(edges, self.id, `study:${row.accession}`, "submitted", row.runs);
+   }
++  await attachFacets(db, nodes, "submitter", "sub.center_name",
++    "JOIN studies st ON st.accession = r.study_accession JOIN submitters sub ON sub.id = st.submitter_id");
++  await attachFacets(db, nodes, "study", "st.accession",
++    "JOIN studies st ON st.accession = r.study_accession");
+   return { nodes, edges };
+ }
+ 
+-const FOCUS_TYPES = new Set(["submitter", "study", "sample", "organism", "platform", "strategy", "region", "term"]);
++const FOCUS_TYPES = new Set(["submitter", "study", "sample", "organism", "taxon",
++  "genus", "family", "phylum", "platform", "strategy", "region", "term"]);
+ 
+ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
+   const url = new URL(request.url);
+   const focus = url.searchParams.get("focus");
+   if (!focus) {
+     try {
+       return await cachedJson(request, STATS_TTL, async () => json(await hubSubmitter(env.DB)));
+     } catch {
+       return json(
+         {
+@@ -334,20 +487,22 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
+     return json({ error: "invalid focus" }, 400);
+   }
+   try {
+     return await cachedJson(request, STATS_TTL, async () => {
+       let graph: Graph;
+       switch (type) {
+         case "submitter": graph = await focusSubmitter(env.DB, id); break;
+         case "study": graph = await focusStudy(env.DB, id); break;
+         case "sample": graph = await focusSample(env.DB, id); break;
+         case "organism": graph = await focusOrganism(env.DB, id); break;
++        case "taxon": graph = await focusTaxon(env.DB, id); break;
++        case "genus": case "family": case "phylum": graph = await focusTaxon(env.DB, `${type}:${id}`); break;
+         case "platform": case "strategy": case "region": graph = await focusSimple(env.DB, type, id); break;
+         default: graph = await focusTerm(env.DB, id); break;
+       }
+       return json(graph);
+     });
+   } catch {
+     return json(
+       {
+         error: "temporarily_unavailable",
+         message:
