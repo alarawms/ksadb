@@ -202,7 +202,7 @@ async function focusStudy(db: Db, acc: string): Promise<Graph> {
   // tissue terms grouped per organism for human classification
   const { results: tissue } = await db.prepare(
     `SELECT s.organism AS organism, st.term_id
-     FROM sample_terms st ${SAMPLES_RUNS}
+     FROM sample_terms st ${TERMS_SAMPLES}
      JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
      WHERE r.study_accession = ? AND ${SA} AND st.field = 'tissue'`
   ).bind(acc).all<{ organism: string | null; term_id: string }>();
@@ -249,7 +249,7 @@ async function focusStudy(db: Db, acc: string): Promise<Graph> {
 
   const { results: terms } = await db.prepare(
     `SELECT st.term_id, st.field, COUNT(*) AS n
-     FROM sample_terms st ${SAMPLES_RUNS}
+     FROM sample_terms st ${TERMS_SAMPLES}
      JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
      WHERE r.study_accession = ? AND ${SA} GROUP BY st.term_id, st.field LIMIT ${CAP}`
   ).bind(acc).all<{ term_id: string; field: string; n: number }>();

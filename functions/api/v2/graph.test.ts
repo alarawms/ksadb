@@ -121,6 +121,22 @@ describe("GET /api/v2/graph", () => {
     for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
   });
 
+  it("study focus term queries join sample_terms to samples via st alias", async () => {
+    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=study:PRJNA1249945&t=11");
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    const anchored = prepared.filter((s) => s.includes("FROM sample_terms st"));
+    expect(anchored.length).toBeGreaterThan(0);
+    for (const sql of anchored) {
+      // st must be bound to s; SAMPLES_RUNS binds s to the out-of-scope r
+      // alias instead, leaving st unbound (cross product with global terms)
+      expect(sql).toContain("JOIN samples s ON s.biosample_accession = st.biosample_accession");
+      if (sql.includes("r.biosample_accession") && !sql.includes("JOIN ena_runs r"))
+        throw new Error(`dangling r reference: ${sql}`);
+      expect(sql).toContain("s.country = 'SA'");
+    }
+  });
+
   it("rejects a malformed focus", async () => {
     const { ctx } = stubEnv("http://x/api/v2/graph?focus=bogus&t=2");
     const res = await onRequestGet(ctx);
