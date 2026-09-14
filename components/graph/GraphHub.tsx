@@ -1,12 +1,15 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import type { V2FacetsResponse } from "@/lib/api";
+import { useQuery } from "@/lib/useQuery";
 import {
   HUMAN_COLORS, NODE_COLORS,
-  type DetailPayload, type GraphData, type GraphNode, type HumanClass, type NodeType,
+  type ActiveFacets, type DetailPayload, type GraphData, type GraphNode, type HumanClass, type NodeType,
 } from "./graph-layout";
+import FacetRail, { groupsFromNodes } from "./FacetRail";
 import GraphCanvas from "./GraphCanvas";
 import Inspector from "./Inspector";
 
@@ -28,9 +31,15 @@ export default function GraphHub({ focus }: { focus: string | null }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
+  const [active, setActive] = useState<ActiveFacets>({});
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [detail, setDetail] = useState<DetailPayload | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+
+  // Facet options: platforms from the shared /v2/search/facets endpoint
+  // (Saudi-scoped, cached); domain/region/years derived from the loaded
+  // graph nodes themselves (see groupsFromNodes).
+  const facetsRes = useQuery<V2FacetsResponse>("/v2/search/facets");
 
   useEffect(() => {
     let cancelled = false;
@@ -45,6 +54,7 @@ export default function GraphHub({ focus }: { focus: string | null }) {
       .then((d) => {
         if (!cancelled) {
           setData(d);
+          setActive({});
           setLoading(false);
         }
       })
@@ -104,6 +114,11 @@ export default function GraphHub({ focus }: { focus: string | null }) {
     setDetailError(null);
   };
 
+  const groups = useMemo(() => ({
+    ...groupsFromNodes(data?.nodes ?? []),
+    platform: (facetsRes.data?.platforms ?? []).map((p) => ({ value: p.name, count: p.runs })),
+  }), [data, facetsRes.data]);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-4">
@@ -144,14 +159,21 @@ export default function GraphHub({ focus }: { focus: string | null }) {
             {f === "all" ? "all" : f}
           </button>
         ))}
+        <span className="mx-1 text-[var(--text-dim)]">|</span>
+        <span className="inline-flex items-center gap-1 text-[var(--text-dim)]">
+          <span className="inline-block h-2.5 w-2.5 rounded-full border-2"
+            style={{ borderColor: "var(--accent)" }} />
+          recent ≤180d
+        </span>
       </div>
 
       {error && <p className="text-danger">{error}</p>}
       {loading && <p className="text-dim">Loading graph…</p>}
       {detailError && <p className="text-danger">{detailError}</p>}
       <div className="flex flex-col items-start gap-4 xl:flex-row">
+        <FacetRail facets={groups} active={active} onChange={setActive} />
         <div className="min-w-0 flex-1 self-stretch">
-          <GraphCanvas data={data ?? EMPTY_DATA} filter={filter}
+          <GraphCanvas data={data ?? EMPTY_DATA} filter={filter} activeFacets={active}
             onNodeSelect={onNodeSelect} onNodeFocus={onNodeFocus}
             onBackgroundClick={selected ? onClose : undefined} />
         </div>

@@ -40,6 +40,30 @@ export function isDimmed(
   return n.human_class !== filter;
 }
 
+// ---- facet rail dimming: every set facet ANDed against the node's facets ----
+
+export interface ActiveFacets { domain?: string; region?: string; platform?: string; year?: number }
+
+// True when the node passes every set facet. Nodes without facet info fail
+// as soon as any facet is active; platforms match by intersection; a node's
+// years range must include the active year.
+export function facetMatch(
+  f: GraphNode["facets"] | undefined,
+  active: ActiveFacets
+): boolean {
+  if (Object.values(active).every((v) => v === undefined)) return true;
+  if (!f) return false;
+  if (active.domain !== undefined && f.domain !== active.domain) return false;
+  if (active.region !== undefined && f.region !== active.region) return false;
+  if (active.platform !== undefined && !(f.platforms ?? []).includes(active.platform)) return false;
+  if (active.year !== undefined) {
+    const [y0, y1] = f.years ?? [];
+    if (y0 === undefined || y1 === undefined) return false;
+    if (active.year < y0 || active.year > y1) return false;
+  }
+  return true;
+}
+
 export const ZOOM_LABEL_THRESHOLD = 1.5;
 export const ZOOM_EXTENT: [number, number] = [0.2, 8];
 

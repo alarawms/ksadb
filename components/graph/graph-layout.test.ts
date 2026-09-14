@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  filterNodes, isDimmed, neighborIds, NODE_COLORS, HUMAN_COLORS,
-  visibleLabelIds, ZOOM_LABEL_THRESHOLD, type GraphEdge, type GraphNode, type NodeType,
+  facetMatch, filterNodes, isDimmed, neighborIds, NODE_COLORS, HUMAN_COLORS,
+  visibleLabelIds, ZOOM_LABEL_THRESHOLD, type GraphEdge, type GraphNode, type NodeFacets, type NodeType,
 } from "./graph-layout";
 
 const nodes: GraphNode[] = [
@@ -13,6 +13,21 @@ const edges: GraphEdge[] = [
   { source: "study:A", target: "sample:S1", kind: "samples" },
   { source: "sample:S1", target: "organism:O1", kind: "classifies" },
 ];
+
+describe("facetMatch", () => {
+  const f: NodeFacets = { domain: "human", region: "Riyadh", platforms: ["ILLUMINA"], years: [2020, 2024] as [number, number] };
+  it("passes when every active facet matches", () => {
+    expect(facetMatch(f, { domain: "human", region: "Riyadh", platform: "ILLUMINA", year: 2022 })).toBe(true);
+  });
+  it("fails on any mismatch and on missing facet info", () => {
+    expect(facetMatch(f, { domain: "other" })).toBe(false);
+    expect(facetMatch(f, { year: 1999 })).toBe(false);
+    expect(facetMatch(undefined, { platform: "ILLUMINA" })).toBe(false);
+  });
+  it("empty active facets passes everything", () => {
+    expect(facetMatch(undefined, {})).toBe(true);
+  });
+});
 
 describe("neighborIds", () => {
   it("returns self plus direct neighbors", () => {

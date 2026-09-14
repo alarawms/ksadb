@@ -11,8 +11,8 @@ import {
 } from "d3-force";
 
 import {
-  filterNodes, HUMAN_COLORS, isDimmed, neighborIds, NODE_COLORS, visibleLabelIds, ZOOM_EXTENT,
-  type GraphData, type GraphEdge, type GraphNode, type HumanClass,
+  facetMatch, filterNodes, HUMAN_COLORS, isDimmed, neighborIds, NODE_COLORS, visibleLabelIds, ZOOM_EXTENT,
+  type ActiveFacets, type GraphData, type GraphEdge, type GraphNode, type HumanClass,
 } from "./graph-layout";
 
 type Filter = "all" | HumanClass;
@@ -24,9 +24,10 @@ function nodeColor(n: GraphNode): string {
   return NODE_COLORS[n.type];
 }
 
-export default function GraphCanvas({ data, filter, onNodeSelect, onNodeFocus, onBackgroundClick }: {
+export default function GraphCanvas({ data, filter, activeFacets, onNodeSelect, onNodeFocus, onBackgroundClick }: {
   data: GraphData;
   filter: Filter;
+  activeFacets?: ActiveFacets;
   onNodeSelect: (n: GraphNode) => void;
   onNodeFocus: (n: GraphNode) => void;
   onBackgroundClick?: () => void;
@@ -268,7 +269,9 @@ export default function GraphCanvas({ data, filter, onNodeSelect, onNodeFocus, o
               {nodes.map((n) => {
                 const dimFilter = isDimmed(n, filter);
                 const dimHover = neighbors !== null && !neighbors.has(n.id);
-                const dimmed = dimFilter || dimHover;
+                const dimFacet = !!activeFacets && Object.keys(activeFacets).length > 0 &&
+                  !facetMatch(n.facets, activeFacets);
+                const dimmed = dimFilter || dimHover || dimFacet;
                 const r = 6 + Math.min(14, Math.log2(n.count ?? 1));
                 return (
                   <g key={n.id} className="graph-node"
