@@ -47,6 +47,7 @@ export function V2Filters({ value, onChange, facets }: Props) {
         {select("platform", "Platform", facets.platforms ?? [])}
         {select("strategy", "Strategy", facets.strategies ?? [])}
         {select("submitter", "Submitter", facets.submitters ?? [])}
+        {text("study", "Study", "e.g. PRJNA1249945")}
         <label className="block">
           <span className={labelCls}>Organism</span>
           <input className="input w-full" list="ksadb-v2-organisms" placeholder="e.g. Homo sapiens"
