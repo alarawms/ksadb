@@ -25,6 +25,12 @@ function stubEnv(path: string) {
         prepare: (sql: string) => {
           prepared.push(sql);
           const all = async () => {
+            if (sql.includes("MIN(CAST(substr") || sql.includes("GROUP_CONCAT"))
+              return { results: [{ id: "PRJNA1249945", y0: 2023, y1: 2024, recent: 1, platforms: "ILLUMINA", organism: "Homo sapiens", tax_id: 9606, host: null }] };
+            if (sql.includes("JOIN taxonomy t") && !sql.includes("ena_runs"))
+              return { results: [{ name: "Homo sapiens", genus: "Homo", family: "Hominidae", phylum: "Chordata" }] };
+            if (sql.includes("JOIN taxonomy t"))
+              return { results: [{ name: "Camelus dromedarius", tax_id: 9838, n: 2 }] };
             if (sql.includes("submitters") && sql.includes("GROUP BY"))
               return { results: [{ name: "KAUST", runs: 10 }] };
             if (sql.includes("FROM studies"))
@@ -90,6 +96,28 @@ describe("GET /api/v2/graph", () => {
     const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=sample:SRS27212955&t=4");
     const res = await onRequestGet(ctx);
     expect(res.status).toBe(200);
+    for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
+  });
+
+  it("study focus nodes carry facets and taxon lineage", async () => {
+    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=study:PRJNA1249945&t=9");
+    const res = await onRequestGet(ctx);
+    const body = (await res.json()) as {
+      nodes: { type: string; facets?: { domain?: string; years?: number[]; platforms?: string[] }; recent?: boolean }[];
+    };
+    const study = body.nodes.find((n) => n.type === "study");
+    expect(study?.facets?.domain).toBeDefined();
+    expect(study?.facets?.years?.length).toBe(2);
+    expect(body.nodes.some((n) => n.type === "taxon")).toBe(true);
+    for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
+  });
+
+  it("taxon focus returns child organisms", async () => {
+    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=genus:Camelus&t=10");
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { nodes: { type: string }[] };
+    expect(body.nodes.some((n) => n.type === "organism")).toBe(true);
     for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
   });
 

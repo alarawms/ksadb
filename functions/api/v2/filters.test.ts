@@ -27,4 +27,11 @@ describe("parseV2Filters", () => {
     expect(clause).toContain("s.country = 'SA'");
     expect(clause).toContain("s.country = ?");
   });
+
+  it("study param adds an equality filter on r.study_accession", () => {
+    const { clause, params } = parseV2Filters(new URL("https://x/v2/search?study=PRJNA1249945"));
+    expect(clause).toContain("r.study_accession = ?");
+    expect(clause).toContain("s.country = 'SA'");
+    expect(params).toContain("PRJNA1249945");
+  });
 });

@@ -32,6 +32,7 @@ export function parseV2Filters(url: URL): V2Where {
   eq("r.platform", p.get("platform"));
   eq("r.library_strategy", p.get("strategy"));
   eq("sub.center_name", p.get("submitter"));
+  eq("r.study_accession", p.get("study"));
   const from = p.get("from");
   if (from) {
     conds.push("r.submitted_date >= ?");

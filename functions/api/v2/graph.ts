@@ -5,7 +5,9 @@ import { classifyHuman, HumanClass } from "./_lib/human";
 type NodeType = "submitter" | "study" | "sample" | "organism" | "taxon"
   | "platform" | "strategy" | "region" | "publication" | "term";
 interface GraphNode { id: string; type: NodeType; label: string; count?: number;
-  human_class?: HumanClass; link?: string | null }
+  human_class?: HumanClass;
+  facets?: { domain?: HumanClass; region?: string; platforms?: string[]; years?: [number, number] };
+  recent?: boolean; link?: string | null }
 interface GraphEdge { source: string; target: string; kind: string; count?: number }
 interface Graph { nodes: GraphNode[]; edges: GraphEdge[] }
 
@@ -38,6 +40,84 @@ function linkFor(type: NodeType, key: string, label: string): string | null | un
   }
 }
 
+// ---- node facets: domain / platforms / years / recent, batched per scope ----
+
+interface FacetRow { id: string; y0: number | null; y1: number | null; recent: number; platforms: string | null; organism: string | null; tax_id: number | null; host: string | null; }
+
+type NodeFacets = NonNullable<GraphNode["facets"]> & { recent: boolean };
+
+// Batched per-node facets over the ids already at hand (IN-list capped by CAP);
+// `joinSql` adds the minimal dim joins the scope column needs beyond
+// ena_runs+samples (studies for st.accession, studies+submitters for sub.center_name).
+async function scopeFacets(db: Db, scopeCol: string, ids: string[], joinSql = ""): Promise<Map<string, NodeFacets>> {
+  if (!ids.length) return new Map();
+  const ph = ids.map(() => "?").join(",");
+  const { results } = await db.prepare(
+    `SELECT ${scopeCol} AS id,
+            MIN(CAST(substr(r.submitted_date, 1, 4) AS INTEGER)) AS y0,
+            MAX(CAST(substr(r.submitted_date, 1, 4) AS INTEGER)) AS y1,
+            MAX(CASE WHEN r.submitted_date >= date('now', '-180 days') THEN 1 ELSE 0 END) AS recent,
+            GROUP_CONCAT(DISTINCT r.platform) AS platforms,
+            s.organism AS organism, s.tax_id AS tax_id, s.host AS host
+     FROM ena_runs r ${SAMPLES_RUNS} ${joinSql}
+     WHERE ${scopeCol} IN (${ph}) AND ${SA}
+     GROUP BY ${scopeCol}, s.organism, s.tax_id, s.host`
+  ).bind(...ids).all<FacetRow>();
+  const out = new Map<string, NodeFacets>();
+  for (const row of results) {
+    const cur = out.get(row.id) ?? { recent: false };
+    if (row.y0 != null) cur.years = [Math.min(cur.years?.[0] ?? row.y0, row.y0), Math.max(cur.years?.[1] ?? row.y1 ?? row.y0, row.y1 ?? row.y0)] as [number, number];
+    if (row.recent) cur.recent = true;
+    if (row.platforms) cur.platforms = [...new Set([...(cur.platforms ?? []), ...row.platforms.split(",")])].slice(0, 5);
+    // domain aggregation: human > human_associated > other. Tissue terms are
+    // intentionally omitted at group scope — name/tax_id/host carry the common
+    // cases; keep classifyHuman as the only classification rule source.
+    const cls = classifyHuman(row.organism, row.tax_id, row.host, []);
+    const rank = { other: 0, human_associated: 1, human: 2 } as const;
+    if (!cur.domain || rank[cls] > rank[cur.domain as keyof typeof rank]) cur.domain = cls;
+    out.set(row.id, cur);
+  }
+  return out;
+}
+
+async function attachFacets(db: Db, nodes: GraphNode[], type: NodeType, scopeCol: string, joinSql = "") {
+  const ofType = nodes.filter((n) => n.type === type);
+  if (!ofType.length) return;
+  const ids = ofType.map((n) => n.id.slice(n.type.length + 1)).slice(0, CAP);
+  const facets = await scopeFacets(db, scopeCol, ids, joinSql);
+  for (const n of ofType) {
+    const f = facets.get(n.id.slice(n.type.length + 1));
+    if (!f) continue;
+    const { recent, ...rest } = f;
+    n.facets = rest;
+    n.recent = recent;
+  }
+}
+
+// taxon lineage chain: organism → genus:<g> → family:<f> → phylum:<p>,
+// omitting ranks the taxonomy table has no value for.
+function addTaxonChain(
+  nodes: GraphNode[], edges: GraphEdge[], childId: string,
+  lineage: { genus?: string | null; family?: string | null; phylum?: string | null } | undefined,
+) {
+  if (!lineage) return;
+  const ranks: { rank: string; value: string | null | undefined }[] = [
+    { rank: "genus", value: lineage.genus },
+    { rank: "family", value: lineage.family },
+    { rank: "phylum", value: lineage.phylum },
+  ];
+  let cur = childId;
+  for (const { rank, value } of ranks) {
+    if (!value) continue;
+    const id = `taxon:${rank}:${value}`;
+    if (!nodes.some((n) => n.id === id))
+      nodes.push(node("taxon", `${rank}:${value}`, value, { link: linkFor("taxon", `${rank}:${value}`, value) }));
+    if (!edges.some((e) => e.source === cur && e.target === id && e.kind === "classified_in"))
+      addEdge(edges, cur, id, "classified_in");
+    cur = id;
+  }
+}
+
 // ---- default hub: top Saudi submitters and their studies ----
 
 async function hubSubmitter(db: Db): Promise<Graph> {
@@ -67,6 +147,10 @@ async function hubSubmitter(db: Db): Promise<Graph> {
       addEdge(edges, subId, `study:${st.accession}`, "submitted", st.runs);
     }
   }
+  await attachFacets(db, nodes, "submitter", "sub.center_name",
+    "JOIN studies st ON st.accession = r.study_accession JOIN submitters sub ON sub.id = st.submitter_id");
+  await attachFacets(db, nodes, "study", "st.accession",
+    "JOIN studies st ON st.accession = r.study_accession");
   return { nodes, edges };
 }
 
@@ -141,6 +225,26 @@ async function focusStudy(db: Db, acc: string): Promise<Graph> {
     addEdge(edges, self.id, `organism:${row.name}`, "classifies", row.n);
   }
 
+  await attachFacets(db, nodes, "study", "st.accession",
+    "JOIN studies st ON st.accession = r.study_accession");
+  await attachFacets(db, nodes, "sample", "s.biosample_accession");
+  await attachFacets(db, nodes, "organism", "s.organism");
+
+  // taxon lineage per organism (batched): organism → genus → family → phylum
+  const organismNodes = nodes.filter((n) => n.type === "organism");
+  if (organismNodes.length) {
+    const names = organismNodes.map((n) => n.id.slice("organism:".length)).slice(0, CAP);
+    const ph = names.map(() => "?").join(",");
+    const { results: lineage } = await db.prepare(
+      `SELECT s.organism AS name, t.genus, t.family, t.phylum
+       FROM samples s JOIN taxonomy t ON t.tax_id = s.tax_id
+       WHERE s.organism IN (${ph}) AND ${SA} GROUP BY s.organism, t.genus, t.family, t.phylum`
+    ).bind(...names).all<{ name: string; genus: string | null; family: string | null; phylum: string | null }>();
+    const byName = new Map<string, { genus: string | null; family: string | null; phylum: string | null }>();
+    for (const row of lineage) if (!byName.has(row.name)) byName.set(row.name, row);
+    for (const n of organismNodes) addTaxonChain(nodes, edges, n.id, byName.get(n.id.slice("organism:".length)));
+  }
+
   await runAttributeNodes(db, "r.study_accession = ?", acc, self, edges, nodes);
 
   const { results: terms } = await db.prepare(
@@ -193,6 +297,11 @@ async function focusSample(db: Db, acc: string): Promise<Graph> {
     addEdge(edges, self.id, `study:${row.accession}`, "samples", row.runs);
   }
 
+  await attachFacets(db, nodes, "sample", "s.biosample_accession");
+  await attachFacets(db, nodes, "study", "st.accession",
+    "JOIN studies st ON st.accession = r.study_accession");
+  await attachFacets(db, nodes, "organism", "s.organism");
+
   await runAttributeNodes(db, "r.biosample_accession = ?", acc, self, edges, nodes);
 
   const { results: terms } = await db.prepare(
@@ -234,6 +343,19 @@ async function focusOrganism(db: Db, name: string): Promise<Graph> {
     nodes.push(node("sample", row.accession, row.accession, { count: row.n, link: linkFor("sample", row.accession, row.accession) }));
     addEdge(edges, self.id, `sample:${row.accession}`, "samples", row.n);
   }
+
+  await attachFacets(db, nodes, "organism", "s.organism");
+  await attachFacets(db, nodes, "study", "st.accession",
+    "JOIN studies st ON st.accession = r.study_accession");
+  await attachFacets(db, nodes, "sample", "s.biosample_accession");
+
+  // taxon lineage: organism → genus → family → phylum (omit missing ranks)
+  const { results: lineage } = await db.prepare(
+    `SELECT t.genus, t.family, t.phylum FROM samples s
+     JOIN taxonomy t ON t.tax_id = s.tax_id
+     WHERE s.organism = ? AND ${SA} LIMIT 1`
+  ).bind(name).all<{ genus: string | null; family: string | null; phylum: string | null }>();
+  addTaxonChain(nodes, edges, self.id, lineage[0]);
   return { nodes, edges };
 }
 
@@ -286,6 +408,32 @@ async function focusTerm(db: Db, termId: string): Promise<Graph> {
   return { nodes, edges };
 }
 
+// ---- taxon focus ----
+
+async function focusTaxon(db: Db, id: string): Promise<Graph> {
+  const m = /^(genus|family|phylum):(.+)$/.exec(id);
+  const nodes: GraphNode[] = [];
+  const edges: GraphEdge[] = [];
+  if (!m) return { nodes, edges };
+  const [, rank, value] = m;
+  const self = node("taxon", id, value as string, {});
+  nodes.push(self);
+  // rank is validated against the regex capture, so t.${rank} is a fixed column
+  const { results: organisms } = await db.prepare(
+    `SELECT s.organism AS name, s.tax_id AS tax_id, COUNT(*) AS n
+     FROM samples s JOIN ena_runs r ON r.biosample_accession = s.biosample_accession
+     JOIN taxonomy t ON t.tax_id = s.tax_id
+     WHERE t.${rank} = ? AND ${SA} AND s.organism IS NOT NULL
+     GROUP BY s.organism, s.tax_id ORDER BY n DESC LIMIT ${CAP}`
+  ).bind(value).all<{ name: string; tax_id: number | null; n: number }>();
+  for (const row of organisms) {
+    const cls = classifyHuman(row.name, row.tax_id, null, []);
+    nodes.push(node("organism", row.name, row.name, { count: row.n, human_class: cls, link: linkFor("organism", row.name, row.name) }));
+    addEdge(edges, self.id, `organism:${row.name}`, "classifies", row.n);
+  }
+  return { nodes, edges };
+}
+
 // ---- submitter focus ----
 
 async function focusSubmitter(db: Db, name: string): Promise<Graph> {
@@ -305,10 +453,15 @@ async function focusSubmitter(db: Db, name: string): Promise<Graph> {
     nodes.push(node("study", row.accession, row.title ?? row.accession, { count: row.runs, link: linkFor("study", row.accession, row.title ?? row.accession) }));
     addEdge(edges, self.id, `study:${row.accession}`, "submitted", row.runs);
   }
+  await attachFacets(db, nodes, "submitter", "sub.center_name",
+    "JOIN studies st ON st.accession = r.study_accession JOIN submitters sub ON sub.id = st.submitter_id");
+  await attachFacets(db, nodes, "study", "st.accession",
+    "JOIN studies st ON st.accession = r.study_accession");
   return { nodes, edges };
 }
 
-const FOCUS_TYPES = new Set(["submitter", "study", "sample", "organism", "platform", "strategy", "region", "term"]);
+const FOCUS_TYPES = new Set(["submitter", "study", "sample", "organism", "taxon",
+  "genus", "family", "phylum", "platform", "strategy", "region", "term"]);
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   const url = new URL(request.url);
@@ -341,6 +494,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         case "study": graph = await focusStudy(env.DB, id); break;
         case "sample": graph = await focusSample(env.DB, id); break;
         case "organism": graph = await focusOrganism(env.DB, id); break;
+        case "taxon": graph = await focusTaxon(env.DB, id); break;
+        case "genus": case "family": case "phylum": graph = await focusTaxon(env.DB, `${type}:${id}`); break;
         case "platform": case "strategy": case "region": graph = await focusSimple(env.DB, type, id); break;
         default: graph = await focusTerm(env.DB, id); break;
       }
