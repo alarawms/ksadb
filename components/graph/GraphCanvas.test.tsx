@@ -9,21 +9,25 @@ afterEach(cleanup);
 const fixture: GraphData = {
   nodes: [
     { id: "study-1", type: "study", label: "Study Alpha", count: 12, link: "/study/1" },
-    { id: "sample-1", type: "sample", label: "Sample Beta", count: 3 },
+    { id: "sample-1", type: "sample", label: "Sample Beta", count: 3, recent: true },
   ],
   edges: [
     { source: "study-1", target: "sample-1", kind: "has_sample", count: 3 },
   ],
 };
 
-async function renderCanvas() {
-  const onNodeClick = vi.fn();
-  const utils = render(<GraphCanvas data={fixture} filter="all" onNodeClick={onNodeClick} />);
+async function renderCanvas(extra?: { onBackgroundClick?: () => void }) {
+  const onNodeSelect = vi.fn();
+  const onNodeFocus = vi.fn();
+  const utils = render(
+    <GraphCanvas data={fixture} filter="all" onNodeSelect={onNodeSelect} onNodeFocus={onNodeFocus}
+      {...(extra ?? {})} />
+  );
   // Nodes enter the DOM only after the simulation's first tick.
   await waitFor(() => {
     expect(utils.container.querySelectorAll("g.graph-node").length).toBe(2);
   });
-  return { onNodeClick, ...utils };
+  return { onNodeSelect, onNodeFocus, ...utils };
 }
 
 describe("GraphCanvas", () => {
@@ -58,10 +62,10 @@ describe("GraphCanvas", () => {
     await renderCanvas();
     const node = document.querySelector("g.graph-node") as SVGGElement;
     fireEvent.mouseEnter(node);
-    expect(await screen.findByText("click to open")).toBeTruthy();
+    expect(await screen.findByText("click for details · double-click to focus")).toBeTruthy();
     expect(screen.getAllByText("Study Alpha").length).toBeGreaterThan(0);
     fireEvent.mouseLeave(node);
-    await waitFor(() => expect(screen.queryByText("click to open")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("click for details · double-click to focus")).toBeNull());
   });
 
   it("zoom control buttons mutate the <g> transform", async () => {
@@ -79,7 +83,7 @@ describe("GraphCanvas", () => {
   it("mouse drag on a node does not throw and does not swallow clicks", async () => {
     const errors: Error[] = [];
     window.addEventListener("error", (e) => errors.push(e.error as Error));
-    const { container, onNodeClick } = await renderCanvas();
+    const { container, onNodeSelect } = await renderCanvas();
     const node = container.querySelector("g.graph-node") as SVGGElement;
     // happy-dom's SVGPoint lacks matrixTransform, which d3-selection's pointer
     // math needs; stub the svg geometry so d3-drag can compute a position.
@@ -98,6 +102,42 @@ describe("GraphCanvas", () => {
     // browser mouseup and click are separate tasks, so yield a macrotask.
     await new Promise((r) => setTimeout(r, 0));
     fireEvent.click(node);
-    expect(onNodeClick).toHaveBeenCalledTimes(1);
+    expect(onNodeSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("single click selects, double click focuses", async () => {
+    const select = vi.fn();
+    const focus = vi.fn();
+    const { container } = render(
+      <GraphCanvas data={fixture} filter="all" onNodeSelect={select} onNodeFocus={focus} />);
+    // Labels render only on hover/zoom, so target the node <g> directly;
+    // fixture order guarantees the first node is "Study Alpha".
+    await waitFor(() => {
+      expect(container.querySelectorAll("g.graph-node").length).toBe(2);
+    });
+    const nodeEl = container.querySelector("g.graph-node")!;
+    fireEvent.click(nodeEl);
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(focus).not.toHaveBeenCalled();
+    fireEvent.doubleClick(nodeEl);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws a recency ring under nodes flagged recent", async () => {
+    const { container } = await renderCanvas();
+    // "Sample Beta" is the fixture's recent node; its ring is an extra circle
+    // inside the same <g>, so the recent node has one more circle than the other.
+    const groups = Array.from(container.querySelectorAll("g.graph-node"));
+    const counts = groups.map((g) => g.querySelectorAll("circle").length).sort();
+    expect(counts).toEqual([1, 2]);
+  });
+
+  it("background click calls onBackgroundClick", async () => {
+    const onBackgroundClick = vi.fn();
+    const { container } = await renderCanvas({ onBackgroundClick });
+    const rect = container.querySelector("svg > g > rect");
+    expect(rect).toBeTruthy();
+    fireEvent.click(rect!);
+    expect(onBackgroundClick).toHaveBeenCalledTimes(1);
   });
 });

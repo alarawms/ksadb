@@ -5,9 +5,10 @@ import { useEffect, useState } from "react";
 
 import {
   HUMAN_COLORS, NODE_COLORS,
-  type GraphData, type GraphNode, type HumanClass, type NodeType,
+  type DetailPayload, type GraphData, type GraphNode, type HumanClass, type NodeType,
 } from "./graph-layout";
 import GraphCanvas from "./GraphCanvas";
+import Inspector from "./Inspector";
 
 type Filter = "all" | HumanClass;
 
@@ -27,6 +28,9 @@ export default function GraphHub({ focus }: { focus: string | null }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
+  const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [detail, setDetail] = useState<DetailPayload | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,11 +59,49 @@ export default function GraphHub({ focus }: { focus: string | null }) {
     };
   }, [focus]);
 
-  const onNodeClick = (n: GraphNode) => {
+  // Detail fetch follows the selection; a stale response (previous node or
+  // unmounted) must not land in the panel, same cancelled-flag pattern as above.
+  useEffect(() => {
+    if (!selected || selected.type === "publication") return;
+    let cancelled = false;
+    setDetail(null);
+    setDetailError(null);
+    fetch(`/api/v2/graph/detail?node=${encodeURIComponent(selected.id)}`, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`API /v2/graph/detail -> ${res.status}`);
+        return res.json() as Promise<DetailPayload>;
+      })
+      .then((d) => {
+        if (!cancelled) setDetail(d);
+      })
+      .catch((err) => {
+        if (!cancelled) setDetailError(String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
+
+  const onNodeSelect = (n: GraphNode) => {
     // publication placeholder nodes carry no data and no valid focus type
     if (n.type === "publication") return;
-    if (n.link) router.push(n.link);
-    else router.push(`/graph?focus=${encodeURIComponent(n.id)}`);
+    setSelected(n);
+  };
+
+  const onNodeFocus = (n: GraphNode) => {
+    if (n.type === "publication") return;
+    router.push(`/graph?focus=${encodeURIComponent(n.id)}`);
+  };
+
+  // Inspector's "Focus graph" only has the node id, not the node object.
+  const onFocusId = (id: string) => {
+    router.push(`/graph?focus=${encodeURIComponent(id)}`);
+  };
+
+  const onClose = () => {
+    setSelected(null);
+    setDetail(null);
+    setDetailError(null);
   };
 
   return (
@@ -106,7 +148,20 @@ export default function GraphHub({ focus }: { focus: string | null }) {
 
       {error && <p className="text-danger">{error}</p>}
       {loading && <p className="text-dim">Loading graph…</p>}
-      <GraphCanvas data={data ?? EMPTY_DATA} filter={filter} onNodeClick={onNodeClick} />
+      {detailError && <p className="text-danger">{detailError}</p>}
+      <div className="flex flex-col items-start gap-4 xl:flex-row">
+        <div className="min-w-0 flex-1 self-stretch">
+          <GraphCanvas data={data ?? EMPTY_DATA} filter={filter}
+            onNodeSelect={onNodeSelect} onNodeFocus={onNodeFocus}
+            onBackgroundClick={selected ? onClose : undefined} />
+        </div>
+        {selected && (
+          <Inspector node={selected} detail={detail}
+            onClose={onClose} onFocus={onFocusId}
+            onOpen={(link) => router.push(link)}
+            onSearch={(href) => router.push(href)} />
+        )}
+      </div>
     </div>
   );
 }

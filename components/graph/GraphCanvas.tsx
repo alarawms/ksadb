@@ -24,10 +24,12 @@ function nodeColor(n: GraphNode): string {
   return NODE_COLORS[n.type];
 }
 
-export default function GraphCanvas({ data, filter, onNodeClick }: {
+export default function GraphCanvas({ data, filter, onNodeSelect, onNodeFocus, onBackgroundClick }: {
   data: GraphData;
   filter: Filter;
-  onNodeClick: (n: GraphNode) => void;
+  onNodeSelect: (n: GraphNode) => void;
+  onNodeFocus: (n: GraphNode) => void;
+  onBackgroundClick?: () => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef = useRef<SVGGElement>(null);
@@ -69,6 +71,8 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
       });
     zoomRef.current = zoom;
     const svgSel = select(svg).call(zoom);
+    // double-click focuses a node (handleDoubleClick), not d3's zoom-in
+    svgSel.on("dblclick.zoom", null);
 
     dragRef.current = drag<SVGGElement, SimNode>()
       .on("start", (ev: D3DragEvent<SVGGElement, SimNode, SimNode>, d) => {
@@ -168,7 +172,12 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
 
   const handleClick = (n: GraphNode) => {
     if (draggedRef.current) return;
-    onNodeClick(n);
+    onNodeSelect(n);
+  };
+
+  const handleDoubleClick = (n: GraphNode) => {
+    if (draggedRef.current) return;
+    onNodeFocus(n);
   };
 
   const coord = (p: string | SimNode): { x: number; y: number } =>
@@ -237,6 +246,11 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
         <svg ref={svgRef} viewBox="0 0 800 600" className="block h-auto w-full"
           style={{ background: "var(--surface)", touchAction: "none" }} role="img">
           <g ref={gRef}>
+            {onBackgroundClick && (
+              // transparent (not fill="none") so the interior is hit-testable:
+              // clicking empty canvas clears the inspector selection
+              <rect width={800} height={600} fill="transparent" onClick={onBackgroundClick} />
+            )}
             <g>
               {edges.map((e, i) => {
                 const s = coord(e.source);
@@ -255,15 +269,21 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
                 const dimFilter = isDimmed(n, filter);
                 const dimHover = neighbors !== null && !neighbors.has(n.id);
                 const dimmed = dimFilter || dimHover;
+                const r = 6 + Math.min(14, Math.log2(n.count ?? 1));
                 return (
                   <g key={n.id} className="graph-node"
                     transform={`translate(${n.x ?? 0},${n.y ?? 0})`}
                     opacity={dimmed ? 0.15 : 1}
                     style={{ cursor: "pointer" }}
                     onClick={() => handleClick(n)}
+                    onDoubleClick={() => handleDoubleClick(n)}
                     onMouseEnter={() => setHoverId(n.id)}
                     onMouseLeave={() => setHoverId((h) => (h === n.id ? null : h))}>
-                    <circle r={6 + Math.min(14, Math.log2(n.count ?? 1))}
+                    {n.recent && (
+                      <circle r={r + 4} fill="none" stroke="var(--accent)"
+                        strokeWidth={2} strokeOpacity={0.8} />
+                    )}
+                    <circle r={r}
                       fill={nodeColor(n)} fillOpacity={0.9} stroke="var(--surface)" />
                     {flashId === n.id && (
                       <circle r={16} fill="none" stroke="var(--accent)"
@@ -298,7 +318,7 @@ export default function GraphCanvas({ data, filter, onNodeClick }: {
               {hovered.human_class && ` · ${hovered.human_class}`}
             </div>
             <div className="text-[var(--text-dim)]">
-              {hovered.link ? "click to open" : "click to explore"}
+              click for details · double-click to focus
             </div>
           </div>
           );

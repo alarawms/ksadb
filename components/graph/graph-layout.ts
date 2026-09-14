@@ -1,10 +1,18 @@
 export type NodeType = "submitter" | "study" | "sample" | "organism" | "taxon"
   | "platform" | "strategy" | "region" | "publication" | "term";
 export type HumanClass = "human" | "human_associated" | "other";
+// Mirrors the facets/recent fields Task 1 added to the graph API response.
+export interface NodeFacets {
+  domain?: HumanClass; region?: string; platforms?: string[]; years?: [number, number];
+}
 export interface GraphNode {
   id: string; type: NodeType; label: string; count?: number;
-  human_class?: HumanClass; link?: string | null;
+  human_class?: HumanClass; facets?: NodeFacets; recent?: boolean;
+  link?: string | null;
 }
+// Task 2 detail payload: type-specific keys plus the node type. Renderers
+// read fields defensively (`?? "—"`), so unknown values are fine.
+export type DetailPayload = Record<string, unknown> & { type: NodeType };
 export interface GraphEdge { source: string; target: string; kind: string; count?: number }
 export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[] }
 
