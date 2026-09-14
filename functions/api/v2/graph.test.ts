@@ -29,12 +29,12 @@ function stubEnv(path: string) {
               return { results: [{ id: "PRJNA1249945", y0: 2023, y1: 2024, recent: 1, platforms: "ILLUMINA", organism: "Homo sapiens", tax_id: 9606, host: null }] };
             if (sql.includes("JOIN taxonomy t") && !sql.includes("ena_runs"))
               return { results: [{ name: "Homo sapiens", genus: "Homo", family: "Hominidae", phylum: "Chordata" }] };
+            if (sql.includes("FROM studies"))
+              return { results: [{ accession: "PRJNA1249945", title: "Camel Microbiome", runs: 4 }] };
             if (sql.includes("JOIN taxonomy t"))
               return { results: [{ name: "Camelus dromedarius", tax_id: 9838, n: 2 }] };
             if (sql.includes("submitters") && sql.includes("GROUP BY"))
               return { results: [{ name: "KAUST", runs: 10 }] };
-            if (sql.includes("FROM studies"))
-              return { results: [{ accession: "PRJNA1249945", title: "Camel Microbiome", runs: 4 }] };
             if (sql.includes("FROM samples") && sql.includes("organism"))
               return { results: [{ name: "Homo sapiens", tax_id: 9606, n: 1 }] };
             if (sql.includes("sample_terms"))
@@ -118,6 +118,21 @@ describe("GET /api/v2/graph", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { nodes: { type: string }[] };
     expect(body.nodes.some((n) => n.type === "organism")).toBe(true);
+    for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
+  });
+
+  it("taxon focus returns studies of its child organisms", async () => {
+    const { ctx, prepared } = stubEnv("http://x/api/v2/graph?focus=genus:Camelus&t=12");
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      nodes: { id: string; type: string }[];
+      edges: { source: string; target: string; kind: string }[];
+    };
+    const study = body.nodes.find((n) => n.type === "study");
+    expect(study).toBeDefined();
+    // mirror focusOrganism: taxon -> study edges use kind "studies"
+    expect(body.edges.some((e) => e.source === "taxon:genus:Camelus" && e.target === study!.id && e.kind === "studies")).toBe(true);
     for (const sql of prepared) expect(sql).toContain("s.country = 'SA'");
   });
 

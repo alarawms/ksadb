@@ -431,6 +431,20 @@ async function focusTaxon(db: Db, id: string): Promise<Graph> {
     nodes.push(node("organism", row.name, row.name, { count: row.n, human_class: cls, link: linkFor("organism", row.name, row.name) }));
     addEdge(edges, self.id, `organism:${row.name}`, "classifies", row.n);
   }
+  // studies of the taxon's child organisms, Saudi-scoped, same CAP convention
+  // as focusOrganism; rank is regex-validated, so t.${rank} is a fixed column
+  const { results: studies } = await db.prepare(
+    `SELECT st.accession, st.title, COUNT(*) AS runs
+     FROM studies st
+     JOIN ena_runs r ON r.study_accession = st.accession
+     ${SAMPLES_RUNS}
+     JOIN taxonomy t ON t.tax_id = s.tax_id
+     WHERE t.${rank} = ? AND ${SA} GROUP BY st.accession ORDER BY runs DESC LIMIT ${CAP}`
+  ).bind(value).all<{ accession: string; title: string | null; runs: number }>();
+  for (const row of studies) {
+    nodes.push(node("study", row.accession, row.title ?? row.accession, { count: row.runs, link: linkFor("study", row.accession, row.title ?? row.accession) }));
+    addEdge(edges, self.id, `study:${row.accession}`, "studies", row.runs);
+  }
   return { nodes, edges };
 }
 
