@@ -42,6 +42,10 @@ function StudyInner() {
   if (error) return <p className="text-danger">{error}</p>;
   if (!study) return <p>Loading…</p>;
 
+  const sampleCount = new Set(
+    study.runs.map((r) => r.biosample_accession).filter(Boolean),
+  ).size;
+
   const addAll = () => {
     setCollection((prev) => {
       const next = addItems(prev, study.runs.map(toCollectionItem));
@@ -52,12 +56,15 @@ function StudyInner() {
 
   return (
     <div className="space-y-4">
+      <Link className="text-sm text-[var(--text-dim)] hover:text-[var(--accent)]" href="/search">
+        ← Back to search
+      </Link>
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">{study.accession}</h1>
           {study.title && <p className="text-dim">{study.title}</p>}
           <p className="text-sm text-dim">
-            {study.runs.length.toLocaleString()} runs
+            {sampleCount.toLocaleString()} samples · {study.runs.length.toLocaleString()} runs
             {study.submitted_date ? ` · submitted ${study.submitted_date.slice(0, 10)}` : ""}
             {study.submitter ? " · " : ""}
             {study.submitter && (

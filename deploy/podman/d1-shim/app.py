@@ -14,9 +14,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+# Full prod parity: production D1 has all 7 migrations applied, and the v1
+# detail endpoints (records/projects/samples) query the legacy 0001 tables
+# (runs/bioprojects/institutions) before falling back to the star schema.
 APPLY_SCHEMA = [
+    "0001_init.sql",
+    "0002_indexes.sql",
     "0003_star_schema.sql",
     "0004_star_indexes.sql",
+    "0005_embedded_studies.sql",
     "0006_sync_meta.sql",
     "0007_embedded_entities.sql",
 ]

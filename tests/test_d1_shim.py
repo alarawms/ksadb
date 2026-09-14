@@ -20,9 +20,8 @@ def shim(tmp_path, monkeypatch):
     monkeypatch.setenv("PORT", "0")  # ephemeral port; 8000 may be occupied
     (tmp_path / "migrations").mkdir()
     src = REPO / "migrations"
-    for name in ("0003_star_schema.sql", "0004_star_indexes.sql",
-                 "0006_sync_meta.sql", "0007_embedded_entities.sql"):
-        (tmp_path / "migrations" / name).write_text((src / name).read_text())
+    for path in sorted(src.glob("0*.sql")):
+        (tmp_path / "migrations" / path.name).write_text(path.read_text())
     (tmp_path / "aggregates").mkdir()
     server = app.init(str(tmp_path / "ksadb.db"),
                       str(tmp_path / "migrations"),

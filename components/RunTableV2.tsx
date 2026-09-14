@@ -28,7 +28,7 @@ export function toCollectionItem(r: V2Run): CollectionItem {
 
 export function RunTableV2({ runs, inCollection, onToggle }: Props) {
   return (
-    <table className="w-full text-left text-sm">
+    <table className="table-zebra w-full text-left text-sm">
       <thead style={{ background: "var(--surface-2)", borderColor: "var(--border)" }} className="border-b">
         <tr>
           <th className="th w-6" aria-label="In collection" />

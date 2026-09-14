@@ -11,7 +11,7 @@ import {
   loadCollection, saveCollection, toggleItem, type CollectionItem,
 } from "@/lib/collection";
 import {
-  semanticBadge, semanticTitle, type SemanticMatch,
+  matchHref, semanticBadge, semanticTitle, type SemanticMatch,
 } from "@/lib/semanticMatch";
 import { useDebounced } from "@/lib/useDebounced";
 import { useQuery } from "@/lib/useQuery";
@@ -146,7 +146,7 @@ export default function ExplorePage() {
           {matches.map((m) => (
             <div key={m.accession} className="flex items-baseline gap-2 text-sm">
               <span className="shrink-0 badge">{semanticBadge(m.type)}</span>
-              <Link className="link shrink-0 font-mono" href={`/study?id=${m.accession}`}>
+              <Link className="link shrink-0 font-mono" href={matchHref(m)}>
                 {m.accession}
               </Link>
               <span className="truncate">{semanticTitle(m)}</span>

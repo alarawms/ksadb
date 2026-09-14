@@ -45,10 +45,11 @@ export function parseV2Filters(url: URL): V2Where {
   const q = p.get("q");
   if (q) {
     conds.push(
-      "(r.run_accession LIKE ? OR s.organism LIKE ? OR sub.center_name LIKE ? OR st.title LIKE ?)"
+      "(r.run_accession LIKE ? OR r.biosample_accession LIKE ? OR " +
+      "s.organism LIKE ? OR sub.center_name LIKE ? OR st.title LIKE ?)"
     );
     const like = `%${q}%`;
-    params.push(like, like, like, like);
+    params.push(like, like, like, like, like);
   }
   return {
     clause: conds.length ? ` WHERE ${conds.join(" AND ")}` : "",
