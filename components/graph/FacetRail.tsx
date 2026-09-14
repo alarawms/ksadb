@@ -12,7 +12,9 @@ export interface FacetGroups {
 
 const headingCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]";
 // The rail is a compact sidebar; cap the long tail so it stays scannable.
-const MAX_CHIPS = 12;
+// Exported because GraphHub applies the same cap to the endpoint-derived
+// platform group.
+export const MAX_CHIPS = 12;
 
 // Client-side groups from the loaded graph nodes: domain counts come from
 // node facets, regions from the region-type nodes in view, years expanded

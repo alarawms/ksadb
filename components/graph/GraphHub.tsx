@@ -9,7 +9,7 @@ import {
   HUMAN_COLORS, NODE_COLORS,
   type ActiveFacets, type DetailPayload, type GraphData, type GraphNode, type HumanClass, type NodeType,
 } from "./graph-layout";
-import FacetRail, { groupsFromNodes } from "./FacetRail";
+import FacetRail, { groupsFromNodes, MAX_CHIPS } from "./FacetRail";
 import GraphCanvas from "./GraphCanvas";
 import Inspector from "./Inspector";
 
@@ -37,8 +37,9 @@ export default function GraphHub({ focus }: { focus: string | null }) {
   const [detailError, setDetailError] = useState<string | null>(null);
 
   // Facet options: platforms from the shared /v2/search/facets endpoint
-  // (Saudi-scoped, cached); domain/region/years derived from the loaded
-  // graph nodes themselves (see groupsFromNodes).
+  // (Saudi-scoped, cached), capped at MAX_CHIPS like the other groups;
+  // domain/region/years derived from the loaded graph nodes themselves
+  // (see groupsFromNodes).
   const facetsRes = useQuery<V2FacetsResponse>("/v2/search/facets");
 
   useEffect(() => {
@@ -116,7 +117,7 @@ export default function GraphHub({ focus }: { focus: string | null }) {
 
   const groups = useMemo(() => ({
     ...groupsFromNodes(data?.nodes ?? []),
-    platform: (facetsRes.data?.platforms ?? []).map((p) => ({ value: p.name, count: p.runs })),
+    platform: (facetsRes.data?.platforms ?? []).map((p) => ({ value: p.name, count: p.runs })).slice(0, MAX_CHIPS),
   }), [data, facetsRes.data]);
 
   return (

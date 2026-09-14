@@ -40,21 +40,30 @@ export function isDimmed(
   return n.human_class !== filter;
 }
 
-// ---- facet rail dimming: every set facet ANDed against the node's facets ----
+// ---- facet rail dimming: set facets ANDed against the node's facets ----
 
 export interface ActiveFacets { domain?: string; region?: string; platform?: string; year?: number }
 
 // True when the node passes every set facet. Nodes without facet info fail
-// as soon as any facet is active; platforms match by intersection; a node's
-// years range must include the active year.
+// as soon as any evaluable facet is active; platforms match by intersection;
+// a node's years range must include the active year.
+//
+// Region is deliberately NOT evaluated: scopeFacets (functions/api/v2/graph.ts)
+// never populates node.facets.region — only years/platforms/domain — so a
+// region selection can never match any node, and failing here dimmed the whole
+// canvas (0.15), including the region node itself, on any region chip click.
+// The rail's region chips (derived from region-type node labels, see
+// FacetRail) only feed the /search?region= deep-link, so a region-only
+// selection passes every node and dims nothing.
 export function facetMatch(
   f: GraphNode["facets"] | undefined,
   active: ActiveFacets
 ): boolean {
-  if (Object.values(active).every((v) => v === undefined)) return true;
+  if (active.domain === undefined && active.platform === undefined && active.year === undefined) {
+    return true;
+  }
   if (!f) return false;
   if (active.domain !== undefined && f.domain !== active.domain) return false;
-  if (active.region !== undefined && f.region !== active.region) return false;
   if (active.platform !== undefined && !(f.platforms ?? []).includes(active.platform)) return false;
   if (active.year !== undefined) {
     const [y0, y1] = f.years ?? [];

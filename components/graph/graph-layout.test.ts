@@ -27,6 +27,17 @@ describe("facetMatch", () => {
   it("empty active facets passes everything", () => {
     expect(facetMatch(undefined, {})).toBe(true);
   });
+  it("region selection dims nothing (facets.region is never populated)", () => {
+    // Region chips derive from region-type node labels, but scopeFacets never
+    // sets node.facets.region, so no node can be evaluated against a region:
+    // even a diverging region and facet-less nodes pass, and other facets
+    // combined with a region still dim as before.
+    expect(facetMatch(f, { region: "Riyadh" })).toBe(true);
+    expect(facetMatch(f, { region: "Jeddah" })).toBe(true);
+    expect(facetMatch(undefined, { region: "Riyadh" })).toBe(true);
+    expect(facetMatch(f, { region: "Riyadh", platform: "ILLUMINA" })).toBe(true);
+    expect(facetMatch(f, { region: "Riyadh", platform: "OXFORD_NANOPORE" })).toBe(false);
+  });
 });
 
 describe("neighborIds", () => {
